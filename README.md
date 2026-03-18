@@ -1,1 +1,0 @@
-# wellness-app

@@ -355,7 +355,7 @@ canvas{max-height:190px;}
       <div id="food-analyse-hint" style="font-size:12px;color:var(--mu);margin-bottom:6px;padding:7px 10px;background:var(--bg);border-radius:8px;text-align:center;display:none">
         Add Dinner to get a complete day analysis
       </div>
-      <button class="btn" id="food-btn" onclick="analyseFood()" style="width:100%">Analyse My Day with AI</button>
+      <button class="btn" id="food-btn" onclick="analyseFood()" style="width:100%">Analyse & Save My Day</button>
       <div id="food-count-hint" style="font-size:11px;color:var(--mu);text-align:center;margin-top:5px;display:none"></div>
     </div>
     <div id="food-result" style="display:none" class="card">
@@ -364,7 +364,7 @@ canvas{max-height:190px;}
         <button class="btn btn-s btn-o" onclick="clearPending()" style="font-size:11px;padding:5px 10px">Clear</button>
       </div>
       <div id="food-result-body"></div>
-      <button class="btn" onclick="logFood()" style="width:100%;margin-top:12px">Save to Diary</button>
+      <div id="food-save-ok" style="display:none;margin-top:8px;padding:7px 10px;background:var(--gl);border-radius:8px;font-size:12px;color:#1A3A23">&#10003; Saved to diary automatically</div>
     </div>
     <div class="sec-lbl">Past Days</div>
     <div class="card"><div id="food-past" style="font-size:13px;color:var(--mu)">Previous days appear here.</div></div>
@@ -735,7 +735,7 @@ function showApp() {
 }
 
 function doSignOut() {
-  if (confirm("Sign out?")) { db.auth.signOut(); location.reload(); }
+  db.auth.signOut().then(function() { location.reload(); });
 }
 
 async function loadData() {
@@ -764,9 +764,15 @@ async function loadData() {
     DAT.food[x.date].push({ meal: x.meal, text: x.description, items: x.items || [], kcal: x.total_kcal, prot: x.total_protein_g, assess: x.assessment, sug: x.suggestion, id: x.id });
   });
   refreshHabits();  // build habits from this user's profile
-  // Load today's analysis count from localStorage
-  var storedCount = localStorage.getItem("analysis_count_" + today());
-  todayAnalysisCount = storedCount ? parseInt(storedCount) : 0;
+  // Load today's analysis count from Supabase
+  try {
+    var usageLoad = await db.from("daily_usage")
+      .select("analysis_count")
+      .eq("user_id", CU.id)
+      .eq("date", today())
+      .single();
+    todayAnalysisCount = (usageLoad.data && usageLoad.data.analysis_count) || 0;
+  } catch(e) { todayAnalysisCount = 0; }
   renderToday();
   renderLog();
   renderFoodLog();
@@ -931,17 +937,21 @@ async function analyseFood() {
     alert("You have closed today. Analysis will be available tomorrow.");
     return;
   }
-  // Check daily limit
-  var storedCount = localStorage.getItem("analysis_count_" + today());
-  todayAnalysisCount = storedCount ? parseInt(storedCount) : 0;
-  if (todayAnalysisCount >= 2) {  // max 2 food analyses (3rd slot reserved for close day)
+  // Check daily limit from Supabase (server-side, per user account not per device)
+  var usageRes = await db.from("daily_usage")
+    .select("analysis_count")
+    .eq("user_id", CU.id)
+    .eq("date", today())
+    .single();
+  todayAnalysisCount = (usageRes.data && usageRes.data.analysis_count) || 0;
+  if (todayAnalysisCount >= 2) {
     var btn = document.getElementById("food-btn");
     if (btn) {
-      btn.textContent  = "Limit reached (2/day)";
-      btn.disabled     = true;
+      btn.textContent   = "Limit reached (2/day)";
+      btn.disabled      = true;
       btn.style.opacity = "0.5";
     }
-    alert("You have used both analyses for today. Close your day and come back tomorrow.");
+    alert("You have used both food analyses for today. Resets tomorrow.");
     return;
   }
   var savedToday2   = (DAT.food && DAT.food[today()]) || [];
@@ -958,12 +968,13 @@ async function analyseFood() {
   document.getElementById("food-btn").disabled         = true;
   document.getElementById("food-result").style.display = "none";
 
-  // Combine already-saved today meals + new pending meals for full picture
-  var savedToday = (DAT.food && DAT.food[today()]) || [];
-  var savedDesc  = savedToday.map(function(e) { return e.meal + ": " + (e.text || e.meal); });
-  var newDesc    = pendingMeals.map(function(m) { return m.meal + ": " + m.text; });
-  var allDesc    = savedDesc.concat(newDesc);
-  var mealsDesc  = allDesc.join("; ");
+  // All meals for today — all are already in DAT.food since addMealToLog saves immediately
+  var allTodayMeals2 = (DAT.food && DAT.food[today()]) || [];
+  // Deduplicate by meal name — keep latest text
+  var mealMap2 = {};
+  allTodayMeals2.forEach(function(e){ mealMap2[e.meal] = e; });
+  var uniqueMeals = Object.values(mealMap2);
+  var mealsDesc  = uniqueMeals.map(function(e){ return e.meal + ": " + (e.text || e.meal); }).join("; ");
 
   var healthCtx = getHealthContext();
   var prompt =
@@ -988,11 +999,64 @@ async function analyseFood() {
     if (!data.content || !data.content[0]) throw new Error("Empty response: " + JSON.stringify(data).slice(0,200));
     var parsed = JSON.parse(data.content[0].text.replace(/```json|```/g, "").trim());
     pendingFood = parsed;
-    // Increment daily analysis count
+
+    // ── Auto-save: update ALL today's food_log rows with AI kcal ────
+    var aiByMeal = {};
+    (parsed.meals || []).forEach(function(m){ aiByMeal[m.meal] = m; });
+    var allTodayMeals = (DAT.food && DAT.food[today()]) || [];
+    for (var si = 0; si < allTodayMeals.length; si++) {
+      var entry = allTodayMeals[si];
+      var aiM   = aiByMeal[entry.meal] || {};
+      var newKcal = aiM.total_kcal || entry.kcal || 0;
+      var newProt = aiM.total_protein_g || entry.prot || 0;
+      var newItems = aiM.items || entry.items || [];
+      try {
+        if (entry.id) {
+          await db.from("food_log").update({
+            total_kcal: newKcal,
+            total_protein_g: newProt,
+            items: newItems,
+            assessment: parsed.assessment || "",
+            suggestion: parsed.suggestion || ""
+          }).eq("id", entry.id).eq("user_id", CU.id);
+        }
+        entry.kcal  = newKcal;
+        entry.prot  = newProt;
+        entry.items = newItems;
+        entry._pending = false;
+      } catch(saveErr) { console.warn("kcal update failed:", saveErr); }
+    }
+
+    // Fresh reload from DB to confirm
+    try {
+      var fresh = await db.from("food_log").select("*").eq("user_id", CU.id).eq("date", today()).order("created_at", {ascending: true});
+      if (fresh.data) {
+        DAT.food[today()] = fresh.data.map(function(x) {
+          return { meal: x.meal, text: x.description, items: x.items || [],
+                   kcal: x.total_kcal || 0, prot: x.total_protein_g || 0,
+                   assess: x.assessment, sug: x.suggestion, id: x.id };
+        });
+      }
+    } catch(e) { console.warn("reload:", e); }
+
+    // Clear pending since all meals are now saved with kcal
+    pendingMeals = [];
+
+    // Increment daily analysis count in Supabase
     todayAnalysisCount = (todayAnalysisCount || 0) + 1;
-    localStorage.setItem("analysis_count_" + today(), todayAnalysisCount);
+    await db.from("daily_usage").upsert(
+      { user_id: CU.id, date: today(), analysis_count: todayAnalysisCount },
+      { onConflict: "user_id,date" }
+    );
     document.getElementById("food-pending-card").style.display = "none";
     showFoodResult(parsed);
+
+    // Show auto-saved confirmation
+    var saveOk = document.getElementById("food-save-ok");
+    if (saveOk) { saveOk.style.display = "block"; }
+
+    renderFoodLog();
+    renderToday();
     updateAnalyseBtn();
   } catch (e) {
     document.getElementById("food-load").style.display = "none";
@@ -1039,56 +1103,85 @@ async function logFood() {
   if (!pendingFood) return;
   if (!DAT.food) DAT.food = {};
   if (!DAT.food[today()]) DAT.food[today()] = [];
-  // Only save meals that are NEW (in pendingMeals) — not the already-saved ones
-  // AI returns all meals but we only insert the pending ones
+  // Update existing rows (already saved by addMealToLog) with AI kcal values
   var allAIMeals = pendingFood.meals || [];
   if (!allAIMeals.length && pendingFood.meal) allAIMeals = [pendingFood];
-  // Build a lookup of AI meal kcal by meal type for the pending entries
   var aiByMeal = {};
   allAIMeals.forEach(function(m){ aiByMeal[m.meal] = m; });
+
   for (var i = 0; i < pendingMeals.length; i++) {
     var pm    = pendingMeals[i];
     var aiM   = aiByMeal[pm.meal] || {};
-    var kcal  = aiM.total_kcal   || 0;
-    var prot  = aiM.total_protein_g || 0;
-    var items = aiM.items || [];
+    var kcal  = aiM.total_kcal        || 0;
+    var prot  = aiM.total_protein_g   || 0;
+    var items = aiM.items             || [];
+
     try {
-      var ins = await db.from("food_log").insert({
-        user_id: CU.id, date: today(),
-        meal: pm.meal, description: pm.text,
-        items: items,
-        total_kcal: kcal,
-        total_protein_g: prot,
-        assessment: pendingFood.assessment || "",
-        suggestion: pendingFood.suggestion || ""
-      }).select("id").single();
-      DAT.food[today()].push({
-        meal: pm.meal, text: pm.text,
-        items: items,
-        kcal: kcal,
-        prot: prot,
-        assess: pendingFood.assessment || "",
-        sug:    pendingFood.suggestion || "",
-        id: ins.data ? ins.data.id : null
-      });
-    } catch(e) { console.error("log error", e); }
+      if (pm.id) {
+        // Update the existing row that was saved by addMealToLog
+        await db.from("food_log").update({
+          total_kcal: kcal,
+          total_protein_g: prot,
+          items: items,
+          assessment: pendingFood.assessment || "",
+          suggestion: pendingFood.suggestion || ""
+        }).eq("id", pm.id).eq("user_id", CU.id);
+        // Update in-memory entry too
+        var memEntry = (DAT.food[today()] || []).find(function(e){ return e.id === pm.id; });
+        if (memEntry) {
+          memEntry.kcal   = kcal;
+          memEntry.prot   = prot;
+          memEntry.items  = items;
+          memEntry.assess = pendingFood.assessment || "";
+          memEntry.sug    = pendingFood.suggestion || "";
+          memEntry._pending = false;
+        }
+      } else {
+        // Fallback: insert if no id (shouldn't happen but safe)
+        var ins = await db.from("food_log").insert({
+          user_id: CU.id, date: today(),
+          meal: pm.meal, description: pm.text,
+          items: items, total_kcal: kcal, total_protein_g: prot,
+          assessment: pendingFood.assessment || "",
+          suggestion: pendingFood.suggestion || ""
+        }).select("id").single();
+        DAT.food[today()].push({
+          meal: pm.meal, text: pm.text, items: items,
+          kcal: kcal, prot: prot, _pending: false,
+          id: ins.data ? ins.data.id : null
+        });
+      }
+    } catch(e) {
+      console.error("log error:", e);
+      alert("Could not update meal kcal: " + (e.message || JSON.stringify(e)));
+    }
   }
   pendingFood  = null;
   pendingMeals = [];
+
+  // Reload today's food from DB to guarantee UI matches actual DB state
+  try {
+    var fresh = await db.from("food_log")
+      .select("*")
+      .eq("user_id", CU.id)
+      .eq("date", today())
+      .order("created_at", {ascending: true});
+    if (fresh.data) {
+      DAT.food[today()] = fresh.data.map(function(x) {
+        return { meal: x.meal, text: x.description, items: x.items || [],
+                 kcal: x.total_kcal || 0, prot: x.total_protein_g || 0,
+                 assess: x.assessment, sug: x.suggestion, id: x.id };
+      });
+    }
+  } catch(e) { console.warn("reload error:", e); }
+
   // Show saved badge on result
   var rb = document.getElementById("food-result-body");
   if (rb) rb.innerHTML = '<div style="padding:8px;background:var(--gl);border-radius:8px;font-size:12px;color:#1A3A23;margin-bottom:8px">&#10003; Saved to diary</div>' + rb.innerHTML;
-  // Hide pending card, reset add form
   document.getElementById("food-pending-card").style.display = "none";
-  // Keep Analyse button VISIBLE so user can add more meals and re-analyse
-  // Show it only if there is a dinner/full day in today's logged meals
-  var todayHasDinner = (DAT.food && DAT.food[today()] || []).some(function(e) {
-    return e.meal === "Dinner" || e.meal === "Full Day";
-  });
   var btn = document.getElementById("food-btn");
   var ahi = document.getElementById("food-analyse-hint");
-  if (btn) btn.style.display = "block";  // always show after first save
-  if (btn) btn.textContent   = "Re-analyse My Full Day";
+  if (btn) { btn.style.display = "block"; btn.textContent = "Re-analyse My Full Day"; }
   if (ahi) ahi.style.display = "none";
   document.getElementById("food-txt").value = "";
   renderFoodLog(); renderToday(); showFlash();
@@ -1111,10 +1204,12 @@ function renderFoodLog() {
     var html  = "";
     entries.forEach(function(e, i) {
       total += e.kcal || 0;
-      var kcalDisplay = e._pending
-        ? '<span style="font-size:11px;color:#E76F51;background:#FFF0EB;border-radius:5px;padding:2px 7px">pending analysis</span>'
-        : '<span style="font-weight:600;color:var(--g);font-size:13px">' + e.kcal + '</span>';
-      var deleteBtn = e._pending ? '' : '<button data-fi="' + i + '" onclick="deleteFood(parseInt(this.dataset.fi))" style="background:none;border:none;color:var(--mu);cursor:pointer;font-size:14px">&#x2715;</button>';
+      // Show "pending" only if no kcal yet (0 kcal and in pendingMeals)
+      var isPending = (e.kcal === 0 || e.kcal === null) && e._pending;
+      var kcalDisplay = isPending
+        ? '<span style="font-size:11px;color:#E76F51;background:#FFF0EB;border-radius:5px;padding:2px 7px">pending</span>'
+        : '<span style="font-weight:600;color:var(--g);font-size:13px">' + (e.kcal || 0) + '</span>';
+      var deleteBtn = '<button data-fi="' + i + '" onclick="deleteFood(parseInt(this.dataset.fi))" style="background:none;border:none;color:var(--mu);cursor:pointer;font-size:14px">&#x2715;</button>';
       html += '<div style="padding:8px 0;border-bottom:1px solid var(--bo);display:flex;justify-content:space-between;align-items:center"><div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:6px"><span style="font-weight:500;font-size:13px">' + e.meal + '</span><span style="font-size:10px;color:var(--mu);background:var(--bg);border-radius:5px;padding:1px 6px">' + today() + '</span></div><div style="font-size:11px;color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (e.text || "").slice(0, 50) + '</div></div><div style="display:flex;align-items:center;gap:6px;margin-left:8px">' + kcalDisplay + deleteBtn + '</div></div>';
     });
     var tgt = PRO.calorie_target || 1650;
@@ -1609,10 +1704,16 @@ function showCloseDay() {
     try {
       var parsedAI = JSON.parse(savedAI);
       var html2 = "";
-      if (parsedAI.honest_take)       html2 += "<div style='margin-bottom:8px'>" + parsedAI.honest_take + "</div>";
-      if (parsedAI.goal_progress)     html2 += "<div style='margin-bottom:8px;padding:7px 10px;background:rgba(45,106,79,.08);border-radius:8px;font-size:12px'><strong>Goal progress:</strong> " + parsedAI.goal_progress + "</div>";
-      if (parsedAI.tomorrow_strategy) html2 += "<div style='margin-bottom:8px'><strong>Tomorrow:</strong> " + parsedAI.tomorrow_strategy + "</div>";
-      if (parsedAI.motivation)        html2 += "<div style='font-style:italic;color:#2D6A4F;border-top:1px solid #B7E4C7;padding-top:8px;margin-top:4px'>" + parsedAI.motivation + "</div>";
+      if (parsedAI.food_analysis)     html2 += "<div style='margin-bottom:10px;padding:9px 12px;background:#F0FBF4;border-radius:10px'><div style='font-size:11px;font-weight:600;color:#2D6A4F;margin-bottom:3px'>&#127822; FOOD</div>" + parsedAI.food_analysis + "</div>";
+      if (parsedAI.habit_analysis)    html2 += "<div style='margin-bottom:10px;padding:9px 12px;background:#F0FBF4;border-radius:10px'><div style='font-size:11px;font-weight:600;color:#2D6A4F;margin-bottom:3px'>&#9989; HABITS</div>" + parsedAI.habit_analysis + "</div>";
+      var waAct2 = "";
+      if (parsedAI.water_analysis)    waAct2 += "<div style='flex:1;padding:9px 12px;background:#F0FBF4;border-radius:10px'><div style='font-size:11px;font-weight:600;color:#2D6A4F;margin-bottom:3px'>&#128167; WATER</div>" + parsedAI.water_analysis + "</div>";
+      if (parsedAI.activity_analysis) waAct2 += "<div style='flex:1;padding:9px 12px;background:#F0FBF4;border-radius:10px'><div style='font-size:11px;font-weight:600;color:#2D6A4F;margin-bottom:3px'>&#128099; ACTIVITY</div>" + parsedAI.activity_analysis + "</div>";
+      if (waAct2) html2 += "<div style='display:flex;gap:8px;margin-bottom:10px'>" + waAct2 + "</div>";
+      if (parsedAI.health_note)       html2 += "<div style='margin-bottom:10px;padding:9px 12px;background:#FFF3CD;border:1px solid #F5D783;border-radius:10px'><div style='font-size:11px;font-weight:600;color:#5A3800;margin-bottom:3px'>&#128138; HEALTH NOTE</div>" + parsedAI.health_note + "</div>";
+      if (parsedAI.goal_progress)     html2 += "<div style='margin-bottom:10px;padding:9px 12px;background:rgba(45,106,79,.08);border-radius:10px'><div style='font-size:11px;font-weight:600;color:#2D6A4F;margin-bottom:3px'>&#127919; GOAL PROGRESS</div>" + parsedAI.goal_progress + "</div>";
+      if (parsedAI.tomorrow_strategy) html2 += "<div style='margin-bottom:10px;padding:9px 12px;background:#F8FAF7;border:1px solid var(--bo);border-radius:10px'><div style='font-size:11px;font-weight:600;color:#2D6A4F;margin-bottom:3px'>&#128161; TOMORROW</div>" + parsedAI.tomorrow_strategy + "</div>";
+      if (parsedAI.motivation)        html2 += "<div style='padding:10px 12px;border-top:2px solid #D8F3DC;font-style:italic;color:#2D6A4F;font-size:13px'>" + parsedAI.motivation + "</div>";
       var aiOut = document.getElementById("cd-ai-out");
       var aiBtn = document.getElementById("cd-ai-btn");
       var aiLoad = document.getElementById("cd-ai-load");
@@ -1762,10 +1863,12 @@ async function requestPushPermission() {
 
 
 // ─── ONBOARDING ───────────────────────────────────────────────────────
+var OB_GOALS    = ["Lose weight","Eat healthy","Sleep well","Build muscle","Reduce stress","More energy","Better fitness"];
 var OB_EQUIP    = ["Dumbbells","Rower","Bench","Resistance bands","Gym membership","No equipment"];
 var OB_EXERCISE = ["Yoga","Walking","Cycling","Swimming","HIIT","Light stretching","None"];
 var OB_DIET     = ["Vegetarian","Vegan","Eggetarian","Non-vegetarian"];
 var OB_HEALTH   = ["None","Diabetes / pre-diabetic","High BP","Thyroid","PCOD/PCOS","Joint pain","Back pain"];
+var OB_SLEEP_QUAL = ["Very poor","Poor","Average","Good","Excellent"];
 
 function makeChips(containerId, options, multi) {
   var el = document.getElementById(containerId);
@@ -2104,21 +2207,49 @@ function renderTodayWater() {
   onWaterSlide(tw);
 }
 
-function addMealToLog() {
+async function addMealToLog() {
   var txt  = document.getElementById("food-txt").value.trim();
   var meal = document.getElementById("food-meal").value;
   if (!txt) { alert("Describe the meal first."); return; }
-  pendingMeals.push({ meal: meal, text: txt });
+
+  // Save to Supabase immediately with 0 kcal (updated after AI analysis)
+  var newEntry = { meal: meal, text: txt, kcal: 0, prot: 0, items: [], id: null, _pending: true };
+  try {
+    var ins = await db.from("food_log").insert({
+      user_id: CU.id,
+      date: today(),
+      meal: meal,
+      description: txt,
+      items: [],
+      total_kcal: 0,
+      total_protein_g: 0
+    }).select("id").single();
+    if (ins.error) throw ins.error;
+    newEntry.id = ins.data ? ins.data.id : null;
+  } catch(e) {
+    alert("Could not save meal: " + (e.message || JSON.stringify(e)));
+    return;
+  }
+
+  // Add to in-memory store
+  if (!DAT.food) DAT.food = {};
+  if (!DAT.food[today()]) DAT.food[today()] = [];
+  DAT.food[today()].push(newEntry);
+
+  // Also track in pendingMeals for AI analysis
+  pendingMeals.push({ meal: meal, text: txt, id: newEntry.id });
+
   document.getElementById("food-txt").value = "";
   // Advance meal selector
   var order = ["Breakfast","Morning Snack","Lunch","Evening Snack","Dinner","Full Day"];
   var sel = document.getElementById("food-meal");
   var idx = order.indexOf(sel.value);
   if (idx >= 0 && idx < order.length - 2) sel.value = order[idx + 1];
+
   renderPendingMeals();
   checkAnalyseReady();
-  // Show pending meals in Today's Log immediately (with 0 kcal until analysed)
   renderFoodLog();
+  showFlash();
 }
 
 function checkAnalyseReady() {
@@ -2146,28 +2277,37 @@ function renderPendingMeals() {
   }).join("");
 }
 
-function removePending(i) {
+async function removePending(i) {
+  var pm = pendingMeals[i];
+  // Remove from Supabase if already saved
+  if (pm && pm.id) {
+    await db.from("food_log").delete().eq("id", pm.id).eq("user_id", CU.id);
+    // Remove from in-memory DAT.food too
+    if (DAT.food && DAT.food[today()]) {
+      DAT.food[today()] = DAT.food[today()].filter(function(e){ return e.id !== pm.id; });
+    }
+  }
   pendingMeals.splice(i, 1);
   renderPendingMeals();
   checkAnalyseReady();
+  renderFoodLog();
 }
 
 function clearPending() {
-  pendingMeals  = [];
-  pendingFood   = null;
+  pendingMeals = [];
+  pendingFood  = null;
   var pc = document.getElementById("food-pending-card");
   var fr = document.getElementById("food-result");
+  var ok = document.getElementById("food-save-ok");
   if (pc) pc.style.display = "none";
   if (fr) fr.style.display = "none";
+  if (ok) ok.style.display = "none";
 }
 
 function updateAnalyseBtn() {
   var btn   = document.getElementById("food-btn");
   if (!btn) return;
-  // Always re-read from localStorage to get accurate count
-  var stored = localStorage.getItem("analysis_count_" + today());
-  todayAnalysisCount = stored ? parseInt(stored) : 0;
-  var count = todayAnalysisCount;
+  var count = todayAnalysisCount || 0;
   var remaining = 2 - count;
   if (isDayClosed()) {
     btn.textContent  = "Day closed";
@@ -2199,9 +2339,13 @@ function updateAnalyseBtn() {
 }
 
 async function runCloseDayAI() {
-  // Check 3-per-day limit (shared with food analyses — 2 food + 1 close day)
-  var storedCount = localStorage.getItem("analysis_count_" + today());
-  todayAnalysisCount = storedCount ? parseInt(storedCount) : 0;
+  // Check 3-per-day limit from Supabase
+  var cdUsage = await db.from("daily_usage")
+    .select("analysis_count")
+    .eq("user_id", CU.id)
+    .eq("date", today())
+    .single();
+  todayAnalysisCount = (cdUsage.data && cdUsage.data.analysis_count) || 0;
   if (todayAnalysisCount >= 3) {
     alert("Daily analysis limit reached (3/day). Resets tomorrow.");
     return;
@@ -2246,37 +2390,104 @@ async function runCloseDayAI() {
     : totalKcal <= calTarget ? (totalKcal + " kcal logged (" + (calTarget - totalKcal) + " under " + calTarget + " target)")
     : (totalKcal + " kcal logged (" + (totalKcal - calTarget) + " over " + calTarget + " target)");
 
+  // Build habit details
+  var habitNames = HABITS.map(function(h){ return h.name; });
+  var doneNames  = HABITS.filter(function(h){ return todayH[h.id]; }).map(function(h){ return h.name; });
+  var missedNames = HABITS.filter(function(h){ return !todayH[h.id]; }).map(function(h){ return h.name; });
+
+  // Water analysis
+  var waterTarget = 8;
+  var waterStatus = todayWater >= waterTarget
+    ? todayWater + " glasses — target met"
+    : todayWater > 0 ? todayWater + "/" + waterTarget + " glasses — " + (waterTarget - todayWater) + " short"
+    : "No water logged";
+
+  // Steps analysis
+  var stepsTarget = 8000;
+  var stepsStatus = todaySteps >= stepsTarget
+    ? todaySteps.toLocaleString() + " steps — target met"
+    : todaySteps > 0 ? todaySteps.toLocaleString() + " steps — " + (stepsTarget - todaySteps).toLocaleString() + " short of 8,000"
+    : "No steps logged";
+
+  // User challenges from onboarding
+  var userChallenges = JSON.parse(PRO.challenges || "[]");
+
+  // What worked chips selected
+  var workedChips = [];
+  var workedEl = document.getElementById("cd-worked-chips");
+  if (workedEl) workedEl.querySelectorAll("button[data-sel='1']").forEach(function(b){ workedChips.push(b.dataset.val); });
+
   var prompt =
-    "You are a warm but honest wellness coach. Give a concise end-of-day summary for " + pname + "." +
-    " Today: " + new Date().toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long"}) + "." +
-    " Goals: " + goals.join(", ") + ". Target weight: " + goalWeight + "kg, current: " + currWeight + "kg." +
-    " Calorie summary: " + calStatus + "." +
-    (mealsSummary !== "No meals logged" ? " Meals eaten: " + mealsSummary + "." : " No meals logged today.") +
-    " Steps: " + (todaySteps ? todaySteps.toLocaleString() : "0") + ". Water: " + todayWater + " glasses." +
-    " Habits completed: " + habitsDone + "/" + totalHabits + "." +
+    "You are an honest wellness coach giving " + pname + " their end-of-day comprehensive review." +
+    " Date: " + new Date().toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long"}) + "." +
+    " USER PROFILE: Goals: " + goals.join(", ") + "." +
+    " Target weight: " + goalWeight + "kg. Current weight: " + currWeight + "kg." +
+    (getHealthContext() ? " Health parameters: " + getHealthContext() + "." : "") +
+    (userChallenges.length ? " Known challenges: " + userChallenges.join(", ") + "." : "") +
+    " FOOD ANALYSIS: " + calStatus + "." +
+    (mealsSummary !== "No meals logged" ? " Meals: " + mealsSummary + "." : " No meals logged.") +
+    " HABIT ANALYSIS: Completed " + habitsDone + "/" + totalHabits + " habits." +
+    (doneNames.length ? " Done: " + doneNames.join(", ") + "." : "") +
+    (missedNames.length ? " Missed: " + missedNames.join(", ") + "." : "") +
+    " WATER ANALYSIS: " + waterStatus + "." +
+    " STEPS ANALYSIS: " + stepsStatus + "." +
+    (workedChips.length ? " User says these worked today: " + workedChips.join(", ") + "." : "") +
     (tomorrowChal.length ? " Tomorrow's challenge: " + tomorrowChal.join(", ") + "." : "") +
-    (getHealthContext() ? " Health: " + getHealthContext() + "." : "") +
-    " IMPORTANT: Use only the calorie numbers above. Do not reference any other calorie figures." +
-    " Respond in JSON only, no markdown. Structure:" +
-    ' {"honest_take":"2-3 sentences on how the day went — be specific about the calorie number above, celebrate wins, note gaps without harshness",' +
-    '"goal_progress":"one sentence on how today moved them toward or away from their goal",' +
-    '"tomorrow_strategy":"specific actionable advice for tomorrow given their stated challenge",' +
-    '"motivation":"one punchy motivational line personalised to their goal"}';
+    " IMPORTANT: Reference only the exact numbers given above. Be specific, honest, and warm." +
+    " Respond in JSON only, no markdown, no extra text. Structure:" +
+    ' {"food_analysis":"2 sentences: how food intake compared to target and what it means for their goals",' +
+    '"habit_analysis":"1-2 sentences on habit completion — which ones done, which missed, pattern observed",' +
+    '"water_analysis":"one sentence on hydration vs 8-glass target",' +
+    '"activity_analysis":"one sentence on steps vs 8000 target",' +
+    '"health_note":"one sentence connecting todays choices to their health parameters if any, else empty string",' +
+    '"goal_progress":"one sentence: did today move them toward or away from their goal and by how much",' +
+    '"tomorrow_strategy":"specific practical advice for tomorrow given their stated challenge",' +
+    '"motivation":"one punchy personalised line — address them by name, reference their specific goal"}';
 
   try {
     var res = await fetch("/api/chat", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({model:"claude-sonnet-4-20250514", max_tokens:600, messages:[{role:"user",content:prompt}]})
+      body: JSON.stringify({model:"claude-sonnet-4-20250514", max_tokens:1200, messages:[{role:"user",content:prompt}]})
     });
     var data = await res.json();
     if (data.error) throw new Error(data.error);
     var parsed = JSON.parse(data.content[0].text.replace(/```json|```/g,"").trim());
     var html2 = "";
-    if (parsed.honest_take)       html2 += "<div style='margin-bottom:8px'>" + parsed.honest_take + "</div>";
-    if (parsed.goal_progress)     html2 += "<div style='margin-bottom:8px;padding:7px 10px;background:rgba(45,106,79,.08);border-radius:8px;font-size:12px'><strong>Goal progress:</strong> " + parsed.goal_progress + "</div>";
-    if (parsed.tomorrow_strategy) html2 += "<div style='margin-bottom:8px'><strong>Tomorrow:</strong> " + parsed.tomorrow_strategy + "</div>";
-    if (parsed.motivation)        html2 += "<div style='font-style:italic;color:#2D6A4F;border-top:1px solid #B7E4C7;padding-top:8px;margin-top:4px'>" + parsed.motivation + "</div>";
+    // Food
+    if (parsed.food_analysis) html2 +=
+      "<div style='margin-bottom:10px;padding:9px 12px;background:#F0FBF4;border-radius:10px'>" +
+      "<div style='font-size:11px;font-weight:600;color:#2D6A4F;margin-bottom:3px'>&#127822; FOOD</div>" +
+      parsed.food_analysis + "</div>";
+    // Habits
+    if (parsed.habit_analysis) html2 +=
+      "<div style='margin-bottom:10px;padding:9px 12px;background:#F0FBF4;border-radius:10px'>" +
+      "<div style='font-size:11px;font-weight:600;color:#2D6A4F;margin-bottom:3px'>&#9989; HABITS</div>" +
+      parsed.habit_analysis + "</div>";
+    // Water + Activity in a row
+    var waAct = "";
+    if (parsed.water_analysis)    waAct += "<div style='flex:1;padding:9px 12px;background:#F0FBF4;border-radius:10px'><div style='font-size:11px;font-weight:600;color:#2D6A4F;margin-bottom:3px'>&#128167; WATER</div>" + parsed.water_analysis + "</div>";
+    if (parsed.activity_analysis) waAct += "<div style='flex:1;padding:9px 12px;background:#F0FBF4;border-radius:10px'><div style='font-size:11px;font-weight:600;color:#2D6A4F;margin-bottom:3px'>&#128099; ACTIVITY</div>" + parsed.activity_analysis + "</div>";
+    if (waAct) html2 += "<div style='display:flex;gap:8px;margin-bottom:10px'>" + waAct + "</div>";
+    // Health note
+    if (parsed.health_note) html2 +=
+      "<div style='margin-bottom:10px;padding:9px 12px;background:#FFF3CD;border:1px solid #F5D783;border-radius:10px'>" +
+      "<div style='font-size:11px;font-weight:600;color:#5A3800;margin-bottom:3px'>&#128138; HEALTH NOTE</div>" +
+      parsed.health_note + "</div>";
+    // Goal progress
+    if (parsed.goal_progress) html2 +=
+      "<div style='margin-bottom:10px;padding:9px 12px;background:rgba(45,106,79,.08);border-radius:10px'>" +
+      "<div style='font-size:11px;font-weight:600;color:#2D6A4F;margin-bottom:3px'>&#127919; GOAL PROGRESS</div>" +
+      parsed.goal_progress + "</div>";
+    // Tomorrow
+    if (parsed.tomorrow_strategy) html2 +=
+      "<div style='margin-bottom:10px;padding:9px 12px;background:#F8FAF7;border:1px solid var(--bo);border-radius:10px'>" +
+      "<div style='font-size:11px;font-weight:600;color:#2D6A4F;margin-bottom:3px'>&#128161; TOMORROW</div>" +
+      parsed.tomorrow_strategy + "</div>";
+    // Motivation
+    if (parsed.motivation) html2 +=
+      "<div style='padding:10px 12px;border-top:2px solid #D8F3DC;font-style:italic;color:#2D6A4F;font-size:13px;line-height:1.6'>" +
+      parsed.motivation + "</div>";
     if (out) { out.innerHTML = html2; out.style.display = "block"; }
     // Save to localStorage keyed by date — persists for 7 days
     localStorage.setItem("closeday_ai_" + today(), JSON.stringify(parsed));
@@ -2286,9 +2497,12 @@ async function runCloseDayAI() {
     if (out) { out.innerHTML = "<span style='color:var(--co)'>Could not generate summary: " + e.message + "</span>"; out.style.display = "block"; }
   }
   if (load) load.style.display = "none";
-  // Count this as one analysis
+  // Increment in Supabase
   todayAnalysisCount = (todayAnalysisCount || 0) + 1;
-  localStorage.setItem("analysis_count_" + today(), todayAnalysisCount);
+  await db.from("daily_usage").upsert(
+    { user_id: CU.id, date: today(), analysis_count: todayAnalysisCount },
+    { onConflict: "user_id,date" }
+  );
   updateAnalyseBtn();
 }
 
