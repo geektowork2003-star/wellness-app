@@ -440,7 +440,44 @@ PYEOF
 [ $? -eq 0 ] && ok "All security checks passed" || fail "Security checks failed"
 
 # ════════════════════════════════════════════════════════════
-hdr "12. LIVE API CHECK"
+hdr "12. PHASE 1 CODE QUALITY"
+# ════════════════════════════════════════════════════════════
+
+python3 << 'PYEOF2'
+import sys
+html = open("index.html").read()
+checks_present = [
+    ("showToast",           "Toast system replaces alert()"),
+    ("toast-el",            "Toast DOM element exists"),
+    (".toast.t-ok",         "Toast CSS (ok/green)"),
+    (".toast.t-err",        "Toast CSS (err/red)"),
+    (".toast.t-warn",       "Toast CSS (warn/orange)"),
+    ("escapeHtml",          "XSS escapeHtml() function"),
+    ("getTodayMeals",       "getTodayMeals() helper"),
+    ("getTodaySteps",       "getTodaySteps() helper"),
+    ("getTodayWater",       "getTodayWater() helper"),
+]
+checks_absent = [
+    ("alert(",              "No alert() calls remaining"),
+]
+ok=0; fail=0
+for term, label in checks_present:
+    if term in html:
+        print(f"  [0;32m✅ {label}[0m"); ok+=1
+    else:
+        print(f"  [0;31m❌ {label} — missing: {term}[0m"); fail+=1
+for term, label in checks_absent:
+    if term not in html:
+        print(f"  [0;32m✅ {label}[0m"); ok+=1
+    else:
+        count = html.count(term)
+        print(f"  [0;31m❌ {label} — found {count} remaining[0m"); fail+=1
+sys.exit(1 if fail else 0)
+PYEOF2
+[ $? -eq 0 ] && ok "All Phase 1 code quality checks passed" || fail "Phase 1 checks failed"
+
+# ════════════════════════════════════════════════════════════
+hdr "13. LIVE API CHECK"
 # ════════════════════════════════════════════════════════════
 
 if [ "$1" = "--local" ]; then

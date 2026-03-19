@@ -76,6 +76,12 @@ canvas{max-height:190px;}
 .saved-flash.on{opacity:1;}
 .set-row{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--bo);}
 .set-row:last-child{border-bottom:none;}
+
+.toast{position:fixed;bottom:calc(72px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);padding:10px 18px;border-radius:99px;font-size:13px;font-weight:500;color:#fff;z-index:9999;opacity:0;transition:opacity .25s;pointer-events:none;white-space:nowrap;max-width:88vw;text-align:center}
+.toast.show{opacity:1}
+.toast.t-ok{background:#2D6A4F}
+.toast.t-err{background:#C0392B}
+.toast.t-warn{background:#E67E22}
 </style>
 </head>
 <body>
@@ -238,7 +244,7 @@ canvas{max-height:190px;}
       <div style="font-size:12px;color:#6B7F6E;margin-bottom:14px">Less than ₹4/day &middot; Cancel anytime</div>
       <div style="font-size:13px;line-height:2">&#10003; AI food diary with calorie tracking<br>&#10003; Personalised wellness plan<br>&#10003; Progress charts &amp; weekly reports<br>&#10003; Family accounts (each private)<br>&#10003; End-of-day summaries &amp; sleep reminders</div>
     </div>
-    <button class="btn" style="margin-bottom:12px" onclick="alert('Payment coming soon. Use a promo code for now.')">Subscribe &#8377;99/month</button>
+    <button class="btn" style="margin-bottom:12px" onclick="showToast('Payment coming soon — use a promo code for now.', 'warn')">Subscribe &#8377;99/month</button>
     <div style="font-size:13px;color:#6B7F6E;margin-bottom:8px">Have a promo code?</div>
     <div style="display:flex;gap:8px">
       <input type="text" id="promo-inp" placeholder="Enter code e.g. WELLNESS2025" style="text-transform:uppercase">
@@ -614,6 +620,40 @@ var TIPS = [
   "Consistency beats perfection. A 70 percent streak over 30 days beats a 100 percent that burns out in 10."
 ];
 
+function showToast(msg, type) {
+  // type: 'ok' | 'err' | 'warn'  (default: ok)
+  var el = document.getElementById("toast-el");
+  if (!el) return;
+  el.textContent   = msg;
+  el.className     = "toast t-" + (type || "ok");
+  el.classList.add("show");
+  clearTimeout(el._t);
+  el._t = setTimeout(function() { el.classList.remove("show"); }, 3000);
+}
+
+// ── Today data helpers — single source of truth ──────────────────
+function getTodayMeals() {
+  return (DAT.food && DAT.food[today()]) || [];
+}
+function getTodaySteps() {
+  var arr = (DAT.steps || []).filter(function(x){ return x.date === today(); });
+  return arr.length ? (parseInt(arr[0].val) || 0) : 0;
+}
+function getTodayWater() {
+  return (DAT.water && DAT.water[today()]) || 0;
+}
+// ─────────────────────────────────────────────────────────────────
+
+function escapeHtml(str) {
+  if (!str) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -823,7 +863,7 @@ function renderToday() {
     dd.setDate(dd.getDate() - 1);
   }
   document.getElementById("t-str").textContent = streak;
-  var todayFood = (DAT.food && DAT.food[today()]) || [];
+  var todayFood = getTodayMeals();
   var todayCals = todayFood.reduce(function(s, e) { return s + (parseFloat(e.kcal) || 0); }, 0);
   var calTgt    = (PRO.calorie_target && PRO.calorie_target >= 800 && PRO.calorie_target <= 4000) ? PRO.calorie_target : 1650;
   document.getElementById("t-cal").textContent = todayCals;
@@ -866,19 +906,18 @@ function renderToday() {
     dotsEl.appendChild(dot);
   }
   // ── Populate steps input with today's saved value ──────────────────
-  var todaySt  = (DAT.steps || []).filter(function(x){ return x.date === today(); });
   var stInput  = document.getElementById("qt-steps");
   var stCurDiv = document.getElementById("qt-steps-cur");
-  if (todaySt.length && todaySt[0].val) {
-    var sv = parseInt(todaySt[0].val);
+  var sv = getTodaySteps();
+  if (sv) {
     if (stInput)  stInput.value = sv;
     if (stCurDiv) stCurDiv.textContent = "Logged today: " + sv.toLocaleString() + " steps";
   } else {
-    if (stInput)  stInput.value = "";
+    if (stInput)  { stInput.value = ""; }
     if (stCurDiv) stCurDiv.textContent = "";
   }
   // ── Populate water slider with today's saved value ──────────────────
-  var tw       = (DAT.water && DAT.water[today()]) || 0;
+  var tw       = getTodayWater();
   var wRange   = document.getElementById("qt-water-range");
   var wVal     = document.getElementById("qt-water-val");
   if (wRange) wRange.value = tw;
@@ -911,7 +950,7 @@ function renderLog() {
 async function saveWeight() {
   var v = parseFloat(document.getElementById("in-wt").value);
   var d = document.getElementById("in-dt").value || today();
-  if (!v || v < 30 || v > 300) { alert("Enter a valid weight."); return; }
+  if (!v || v < 30 || v > 300) { showToast("Enter a valid weight.", "warn"); return; }
   DAT.weights = (DAT.weights || []).filter(function(x) { return x.date !== d; });
   DAT.weights.push({ date: d, val: v });
   DAT.weights.sort(function(a, b) { return a.date.localeCompare(b.date); });
@@ -924,7 +963,7 @@ async function saveWeight() {
 
 async function saveSteps() {
   var v = parseInt(document.getElementById("in-st").value);
-  if (!v || v < 0) { alert("Enter valid steps."); return; }
+  if (!v || v < 0) { showToast("Enter valid steps.", "warn"); return; }
   DAT.steps = (DAT.steps || []).filter(function(x) { return x.date !== today(); });
   DAT.steps.push({ date: today(), val: v });
   document.getElementById("in-st").value = "";
@@ -944,7 +983,7 @@ async function setWater(n) {
 async function analyseFood() {
   // Check day closed
   if (isDayClosed()) {
-    alert("You have closed today. Analysis will be available tomorrow.");
+    showToast("Day is closed. Resets tomorrow.", "warn");
     return;
   }
   // Check daily limit from Supabase (server-side, per user account not per device)
@@ -961,12 +1000,12 @@ async function analyseFood() {
       btn.disabled      = true;
       btn.style.opacity = "0.5";
     }
-    alert("You have used both food analyses for today. Resets tomorrow.");
+    showToast("Daily limit reached (2/day). Resets tomorrow.", "warn");
     return;
   }
-  var savedToday2   = (DAT.food && DAT.food[today()]) || [];
+  var savedToday2   = getTodayMeals();
   var totalMeals    = savedToday2.length + pendingMeals.length;
-  if (!totalMeals) { alert("Add your meals first."); return; }
+  if (!totalMeals) { showToast("Add a meal first.", "warn"); return; }
   var savedHasEnd2   = savedToday2.some(function(e){ return e.meal==="Dinner"||e.meal==="Full Day"; });
   var pendingHasEnd2 = pendingMeals.some(function(m){ return m.meal==="Dinner"||m.meal==="Full Day"; });
   // Warn but don't block — let them analyse partial day too
@@ -979,7 +1018,7 @@ async function analyseFood() {
   document.getElementById("food-result").style.display = "none";
 
   // All meals for today — all are already in DAT.food since addMealToLog saves immediately
-  var allTodayMeals2 = (DAT.food && DAT.food[today()]) || [];
+  var allTodayMeals2 = getTodayMeals();
   // Deduplicate by meal name — keep latest text
   var mealMap2 = {};
   allTodayMeals2.forEach(function(e){ mealMap2[e.meal] = e; });
@@ -1013,7 +1052,7 @@ async function analyseFood() {
     // ── Auto-save: update ALL today's food_log rows with AI kcal ────
     var aiByMeal = {};
     (parsed.meals || []).forEach(function(m){ aiByMeal[m.meal] = m; });
-    var allTodayMeals = (DAT.food && DAT.food[today()]) || [];
+    var allTodayMeals = getTodayMeals();
     for (var si = 0; si < allTodayMeals.length; si++) {
       var entry = allTodayMeals[si];
       var aiM   = aiByMeal[entry.meal] || {};
@@ -1089,7 +1128,7 @@ function showFoodResult(p) {
   mealList.forEach(function(m) {
     var rows = (m.items || []).map(function(it) {
       var n = it.notes ? '<br><span style="font-size:10px;color:var(--mu)">' + it.notes + '</span>' : '';
-      return '<tr style="border-bottom:1px solid var(--bo)"><td style="padding:5px 0">' + it.name + n + '</td><td style="text-align:right;padding:5px 0;color:var(--mu)">' + it.qty + '</td><td style="text-align:right;padding:5px 0;font-weight:500">' + it.kcal + '</td><td style="text-align:right;padding:5px 0;color:var(--mu)">' + it.protein_g + 'g</td></tr>';
+      return '<tr style="border-bottom:1px solid var(--bo)"><td style="padding:5px 0">' + escapeHtml(it.name) + n + '</td><td style="text-align:right;padding:5px 0;color:var(--mu)">' + escapeHtml(it.qty) + '</td><td style="text-align:right;padding:5px 0;font-weight:500">' + (parseInt(it.kcal)||0) + '</td><td style="text-align:right;padding:5px 0;color:var(--mu)">' + (parseFloat(it.protein_g)||0) + 'g</td></tr>';
     }).join('');
     var mcol = (m.total_kcal||0) > 700 ? "var(--co)" : "var(--g)";
     out += '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--bo)">';
@@ -1163,7 +1202,7 @@ async function logFood() {
       }
     } catch(e) {
       console.error("log error:", e);
-      alert("Could not update meal kcal: " + (e.message || JSON.stringify(e)));
+      showToast("Calorie update failed: " + (e.message||"unknown"), "err");
     }
   }
   pendingFood  = null;
@@ -1198,7 +1237,7 @@ async function logFood() {
 }
 
 function renderFoodLog() {
-  var saved   = (DAT.food && DAT.food[today()]) || [];
+  var saved   = getTodayMeals();
   // Merge saved + pending (pending shown with "pending" badge)
   var entries = saved.slice();
   pendingMeals.forEach(function(p) {
@@ -1220,7 +1259,7 @@ function renderFoodLog() {
         ? '<span style="font-size:11px;color:#E76F51;background:#FFF0EB;border-radius:5px;padding:2px 7px">pending</span>'
         : '<span style="font-weight:600;color:var(--g);font-size:13px">' + (e.kcal || 0) + '</span>';
       var deleteBtn = '<button data-fi="' + i + '" onclick="deleteFood(parseInt(this.dataset.fi))" style="background:none;border:none;color:var(--mu);cursor:pointer;font-size:14px">&#x2715;</button>';
-      html += '<div style="padding:8px 0;border-bottom:1px solid var(--bo);display:flex;justify-content:space-between;align-items:center"><div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:6px"><span style="font-weight:500;font-size:13px">' + e.meal + '</span><span style="font-size:10px;color:var(--mu);background:var(--bg);border-radius:5px;padding:1px 6px">' + today() + '</span></div><div style="font-size:11px;color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (e.text || "").slice(0, 50) + '</div></div><div style="display:flex;align-items:center;gap:6px;margin-left:8px">' + kcalDisplay + deleteBtn + '</div></div>';
+      html += '<div style="padding:8px 0;border-bottom:1px solid var(--bo);display:flex;justify-content:space-between;align-items:center"><div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:6px"><span style="font-weight:500;font-size:13px">' + escapeHtml(e.meal) + '</span><span style="font-size:10px;color:var(--mu);background:var(--bg);border-radius:5px;padding:1px 6px">' + today() + '</span></div><div style="font-size:11px;color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml((e.text || "").slice(0, 50)) + '</div></div><div style="display:flex;align-items:center;gap:6px;margin-left:8px">' + kcalDisplay + deleteBtn + '</div></div>';
     });
     var tgt = PRO.calorie_target || 1650;
     var rem = tgt - total;
@@ -1240,7 +1279,7 @@ function renderFoodLog() {
 }
 
 async function deleteFood(idx) {
-  var ens = DAT.food && DAT.food[today()];
+  var ens = getTodayMeals();
   if (!ens || !ens[idx]) return;
   if (ens[idx].id) await db.from("food_log").delete().eq("id", ens[idx].id).eq("user_id", CU.id);
   ens.splice(idx, 1);
@@ -1579,14 +1618,14 @@ function showCloseDay() {
   document.getElementById("cd-title").textContent = greet + ", " + pname + "!";
   document.getElementById("cd-date").textContent  = now.toLocaleDateString("en-IN", {weekday:"long",day:"numeric",month:"long"});
 
-  var todayFood  = (DAT.food && DAT.food[today()]) || [];
+  var todayFood  = getTodayMeals();
   var totalCal   = todayFood.reduce(function(s,e){ return s+(e.kcal||0); }, 0);
   var calTarget  = PRO.calorie_target || 1650;
   var diff       = calTarget - totalCal;
   var todayH     = (DAT.habits && DAT.habits[today()]) || {};
   var habitsDone = Object.values(todayH).filter(Boolean).length;
-  var todaySteps = (function(){ var s=(DAT.steps||[]).filter(function(x){return x.date===today();}); return s.length?s[0].val:0; })();
-  var todayWater = (DAT.water && DAT.water[today()]) || 0;
+  var todaySteps = getTodaySteps();
+  var todayWater = getTodayWater();
 
   // ── Compact 3-line summary ────────────────────────────────────────
   var calLine = totalCal === 0
@@ -1653,7 +1692,7 @@ function showCloseDay() {
   var cdFood     = document.getElementById("cd-food-analysis");
   var cdFoodBody = document.getElementById("cd-food-body");
   var cdFoodMiss = document.getElementById("cd-food-missing");
-  var todayMeals = (DAT.food && DAT.food[today()]) || [];
+  var todayMeals = getTodayMeals();
 
   if (pendingFood && pendingFood.assessment) {
     // Fresh analysis in memory from this session
@@ -1784,7 +1823,7 @@ async function confirmCloseDay() {
     if (res.error) throw res.error;
     PRO.day_closed_date = today();
   } catch(e) {
-    alert("Could not close day: " + (e.message || JSON.stringify(e)));
+    showToast("Could not close day: " + (e.message||"unknown"), "err");
     if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = "Confirm & Close Day ✓"; }
     return;
   }
@@ -2032,7 +2071,7 @@ async function genPlan(fromOnboard) {
     var daysSince = Math.floor((new Date() - new Date(PRO.ai_plan_date)) / 86400000);
     if (daysSince < 7) {
       var daysLeft = 7 - daysSince;
-      alert("Plan generated " + daysSince + " day" + (daysSince===1?"":"s") + " ago. Follow it for " + daysLeft + " more day" + (daysLeft===1?"":"s") + " — plans work best with consistency!");
+      showToast("Follow your plan for " + daysLeft + " more day" + (daysLeft===1?"":"s") + " before regenerating.", "warn");
       return;
     }
   }
@@ -2186,7 +2225,7 @@ async function resetOnboarding() {
 
 async function quickLogSteps() {
   var v = parseInt(document.getElementById("qt-steps").value);
-  if (!v || v < 0) { alert("Enter valid steps."); return; }
+  if (!v || v < 0) { showToast("Enter valid steps.", "warn"); return; }
   DAT.steps = (DAT.steps || []).filter(function(x) { return x.date !== today(); });
   DAT.steps.push({ date: today(), val: v });
   // Show saved value in box and update the "today" label
@@ -2204,7 +2243,7 @@ async function quickLogSteps() {
     );
     if (res.error) throw res.error;
   } catch(e) {
-    alert("Steps save failed: " + (e.message || JSON.stringify(e)));
+    showToast("Steps save failed.", "err");
   }
 }
 
@@ -2231,14 +2270,14 @@ async function saveWaterSlider() {
     if (ok) { ok.style.display = "block"; setTimeout(function(){ ok.style.display="none"; }, 2000); }
     renderToday(); showFlash();
   } catch(e) {
-    alert("Water save failed: " + (e.message || JSON.stringify(e)));
+    showToast("Water save failed.", "err");
   }
 }
 
 function renderTodayWater() {
   var el = document.getElementById("qt-water-range");
   if (!el) return;
-  var tw = (DAT.water && DAT.water[today()]) || 0;
+  var tw = getTodayWater();
   el.value = tw;
   onWaterSlide(tw);
 }
@@ -2246,7 +2285,7 @@ function renderTodayWater() {
 async function addMealToLog() {
   var txt  = document.getElementById("food-txt").value.trim();
   var meal = document.getElementById("food-meal").value;
-  if (!txt) { alert("Describe the meal first."); return; }
+  if (!txt) { showToast("Describe the meal first.", "warn"); return; }
 
   // Save to Supabase immediately with 0 kcal (updated after AI analysis)
   var newEntry = { meal: meal, text: txt, kcal: 0, prot: 0, items: [], id: null, _pending: true };
@@ -2263,7 +2302,7 @@ async function addMealToLog() {
     if (ins.error) throw ins.error;
     newEntry.id = ins.data ? ins.data.id : null;
   } catch(e) {
-    alert("Could not save meal: " + (e.message || JSON.stringify(e)));
+    showToast("Meal save failed.", "err");
     return;
   }
 
@@ -2289,7 +2328,7 @@ async function addMealToLog() {
 }
 
 function checkAnalyseReady() {
-  var savedToday = (DAT.food && DAT.food[today()]) || [];
+  var savedToday = getTodayMeals();
   var hasMeals   = savedToday.length > 0 || pendingMeals.length > 0;
   var hasDinner  = savedToday.some(function(e){ return e.meal==="Dinner"||e.meal==="Full Day"; }) ||
                    pendingMeals.some(function(m){ return m.meal==="Dinner"||m.meal==="Full Day"; });
@@ -2320,7 +2359,7 @@ async function removePending(i) {
     await db.from("food_log").delete().eq("id", pm.id).eq("user_id", CU.id);
     // Remove from in-memory DAT.food too
     if (DAT.food && DAT.food[today()]) {
-      DAT.food[today()] = DAT.food[today()].filter(function(e){ return e.id !== pm.id; });
+      DAT.food[today()] = (DAT.food[today()]||[]).filter(function(e){ return e.id !== pm.id; });
     }
   }
   pendingMeals.splice(i, 1);
@@ -2397,14 +2436,13 @@ async function runCloseDayAI() {
 
   // Gather all day data
   var pname      = displayName();
-  var todayMeals = (DAT.food && DAT.food[today()]) || [];
+  var todayMeals = getTodayMeals();
   var calTarget  = PRO.calorie_target || 1650;
   var todayH     = (DAT.habits && DAT.habits[today()]) || {};
   var habitsDone = Object.keys(todayH).filter(function(k){return todayH[k];}).length;
   var totalHabits = HABITS.length;
-  var todayStepsArr = (DAT.steps || []).filter(function(x){return x.date===today();});
-  var todaySteps = todayStepsArr.length ? todayStepsArr[0].val : 0;
-  var todayWater = (DAT.water && DAT.water[today()]) || 0;
+  var todaySteps = getTodaySteps();
+  var todayWater = getTodayWater();
   var goals      = JSON.parse(PRO.user_goals || '["Lose weight"]');
   var goalWeight = PRO.goal_weight || "not set";
   var currWeight = (DAT.weights && DAT.weights.length) ? DAT.weights[DAT.weights.length-1].val : "not logged";
@@ -2584,7 +2622,7 @@ async function submitFeedback() {
   if (chipsEl) chipsEl.querySelectorAll("button[data-sel='1']").forEach(function(b){ chips.push(b.dataset.val); });
 
   if (!txt && !chips.length) {
-    alert("Please add some feedback or select a topic.");
+    showToast("Add feedback or select a topic.", "warn");
     return;
   }
 
@@ -2638,6 +2676,7 @@ function goTab(btn, name) {
 }
 </script>
 
+<div id="toast-el" class="toast ok"></div>
 <div id="closeday-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:500;align-items:flex-end;justify-content:center">
   <div style="background:#fff;border-radius:20px 20px 0 0;padding:20px 18px 32px;width:100%;max-width:480px;max-height:92vh;overflow-y:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
