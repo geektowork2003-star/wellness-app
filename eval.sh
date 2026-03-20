@@ -447,25 +447,50 @@ python3 << 'PYEOF2'
 import sys
 html = open("index.html").read()
 checks_present = [
-    ("showToast",           "Toast system replaces alert()"),
-    ("toast-el",            "Toast DOM element exists"),
-    (".toast.t-ok",         "Toast CSS (ok/green)"),
-    (".toast.t-err",        "Toast CSS (err/red)"),
-    (".toast.t-warn",       "Toast CSS (warn/orange)"),
-    ("escapeHtml",          "XSS escapeHtml() function"),
-    ("getTodayMeals",       "getTodayMeals() helper"),
-    ("getTodaySteps",       "getTodaySteps() helper"),
-    ("getTodayWater",       "getTodayWater() helper"),
+    # Phase 1 — code quality
+    ("showToast",               "Toast system replaces alert()"),
+    ("toast-el",                "Toast DOM element exists"),
+    (".toast.t-ok",             "Toast CSS (ok/green)"),
+    (".toast.t-err",            "Toast CSS (err/red)"),
+    (".toast.t-warn",           "Toast CSS (warn/orange)"),
+    ("escapeHtml",              "XSS escapeHtml() function"),
+    ("getTodayMeals",           "getTodayMeals() helper"),
+    ("getTodaySteps",           "getTodaySteps() helper"),
+    ("getTodayWater",           "getTodayWater() helper"),
+    # Weight fixes
+    ("inputmode=", "Weight input has inputmode attribute (decimal keyboard iOS)"),
+    ("Math.round(parseFloat",   "Weight rounded to 1 decimal place"),
+    # Close Day UX redesign
+    ("cd-how-btn",              "How did I do today button"),
+    ("How did I do today",      "Correct button label"),
+    ("cd-close-btn",            "Final Close My Day button"),
+    ("closeDayFinal",           "closeDayFinal function (2-step flow)"),
+    ("analysedMeals.length",    "Close Day skips 0-kcal entries"),
+    # Past days accordion
+    ("togglePastDay",           "Past days expandable accordion"),
+    ("buildPastDayDetail",      "Past day detail builder function"),
+    ("past-day-detail",         "Past day detail CSS class"),
+    ("past-arrow",              "Accordion arrow indicator"),
+    ("not analysed",            "Not analysed badge for 0-kcal days"),
 ]
 checks_absent = [
-    ("alert(",              "No alert() calls remaining"),
+    ("alert(",                  "No alert() calls remaining"),
+    ("Check-up Wed 18",         "Hardcoded check-up date removed"),
+    ("18 March",                "Hardcoded date removed"),
 ]
 ok=0; fail=0
 for term, label in checks_present:
-    if term in html:
-        print(f"  [0;32m✅ {label}[0m"); ok+=1
+    if term == "Check-up":
+        found = term not in html
+        if found:
+            print(f"  [0;32m✅ {label}[0m"); ok+=1
+        else:
+            print(f"  [0;31m❌ {label} — still present[0m"); fail+=1
     else:
-        print(f"  [0;31m❌ {label} — missing: {term}[0m"); fail+=1
+        if term in html:
+            print(f"  [0;32m✅ {label}[0m"); ok+=1
+        else:
+            print(f"  [0;31m❌ {label} — missing: {term}[0m"); fail+=1
 for term, label in checks_absent:
     if term not in html:
         print(f"  [0;32m✅ {label}[0m"); ok+=1
@@ -474,7 +499,7 @@ for term, label in checks_absent:
         print(f"  [0;31m❌ {label} — found {count} remaining[0m"); fail+=1
 sys.exit(1 if fail else 0)
 PYEOF2
-[ $? -eq 0 ] && ok "All Phase 1 code quality checks passed" || fail "Phase 1 checks failed"
+[ $? -eq 0 ] && ok "All Phase 1 + today code quality checks passed" || fail "Phase 1 + today checks failed"
 
 # ════════════════════════════════════════════════════════════
 hdr "13. LIVE API CHECK"

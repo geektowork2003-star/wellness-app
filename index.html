@@ -381,7 +381,7 @@ canvas{max-height:190px;}
     <div class="card">
       <div class="card-t">Log Weight</div>
       <div style="display:flex;gap:8px;margin-bottom:8px">
-        <input type="number" id="in-wt" placeholder="e.g. 82.5" step="0.1">
+        <input type="number" id="in-wt" placeholder="e.g. 82.5" step="0.1" inputmode="decimal">
         <input type="date" id="in-dt" style="max-width:148px">
       </div>
       <button class="btn btn-s" onclick="saveWeight()">Save Weight</button>
@@ -409,7 +409,6 @@ canvas{max-height:190px;}
   <div class="sc" id="sc-plan">
     <div style="font-size:17px;font-weight:600;margin:5px 0 3px">Your Plan</div>
     <div style="font-size:12px;color:var(--mu);margin-bottom:11px">Tailored: 47 yrs &middot; BMI 29 &middot; Gentle approach</div>
-    <div class="alert">Check-up Wed 18 March &mdash; add results in More tab for insights.</div>
     <div id="plan-ai-out" style="margin-bottom:11px"></div>
     <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
       <button class="btn btn-s" onclick="genPlan()">&#10022; Regenerate Plan</button>
@@ -948,9 +947,9 @@ function renderLog() {
 }
 
 async function saveWeight() {
-  var v = parseFloat(document.getElementById("in-wt").value);
+  var v = Math.round(parseFloat(document.getElementById("in-wt").value) * 10) / 10;
   var d = document.getElementById("in-dt").value || today();
-  if (!v || v < 30 || v > 300) { showToast("Enter a valid weight.", "warn"); return; }
+  if (!v || v < 20 || v > 300) { showToast("Enter a valid weight (20–300 kg).", "warn"); return; }
   DAT.weights = (DAT.weights || []).filter(function(x) { return x.date !== d; });
   DAT.weights.push({ date: d, val: v });
   DAT.weights.sort(function(a, b) { return a.date.localeCompare(b.date); });
@@ -1270,12 +1269,92 @@ function renderFoodLog() {
   var pfl  = document.getElementById("food-past");
   var past = Object.keys(DAT.food || {}).filter(function(d) { return d !== today(); }).sort().reverse().slice(0, 7);
   if (!past.length) { pfl.innerHTML = '<span style="color:var(--mu)">Previous days appear here.</span>'; return; }
+
   pfl.innerHTML = past.map(function(d) {
     var ens  = DAT.food[d];
-    var tot  = ens.reduce(function(s, e) { return s + (e.kcal || 0); }, 0);
+    var tot  = ens.reduce(function(s, e) { return s + (parseFloat(e.kcal) || 0); }, 0);
     var tgt2 = PRO.calorie_target || 1650;
-    return '<div style="padding:8px 0;border-bottom:1px solid var(--bo);display:flex;justify-content:space-between"><div><div style="font-weight:500;font-size:13px">' + d + '</div><div style="font-size:11px;color:var(--mu)">' + ens.map(function(e) { return e.meal; }).join(" &middot; ") + '</div></div><span style="font-weight:600;font-size:13px;color:' + (tot <= tgt2 ? "var(--g)" : "var(--co)") + '">' + tot + ' kcal</span></div>';
+    var isOver = tot > tgt2;
+    var hasAnalysis = ens.some(function(e){ return e.items && e.items.length > 0; });
+    var notAnalysed = tot === 0 && ens.length > 0;
+
+    // Format date nicely: "2026-03-18" → "Tue 18 Mar"
+    var dt = new Date(d + "T00:00:00");
+    var dayStr = dt.toLocaleDateString("en-IN", { weekday:"short", day:"numeric", month:"short" });
+    var kcalColor = isOver ? "var(--co)" : "var(--g)";
+    var kcalLabel = notAnalysed
+      ? '<span style="font-size:10px;color:#E76F51;background:#FFF0EB;border-radius:5px;padding:2px 6px">not analysed</span>'
+      : '<span style="font-weight:600;font-size:13px;color:' + kcalColor + '">' + Math.round(tot) + ' kcal</span>';
+
+    return '<div class="past-day-row" data-date="' + d + '" style="border-bottom:1px solid var(--bo)">'
+      + '<div onclick="togglePastDay(this)" style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;cursor:pointer">'
+      + '<div><div style="font-weight:600;font-size:13px">' + escapeHtml(dayStr) + '</div>'
+      + '<div style="font-size:11px;color:var(--mu);margin-top:2px">' + ens.map(function(e){ return escapeHtml(e.meal); }).join(" · ") + '</div></div>'
+      + '<div style="display:flex;align-items:center;gap:8px">' + kcalLabel
+      + '<span class="past-arrow" style="font-size:11px;color:var(--mu);transition:transform .2s">▶</span></div>'
+      + '</div>'
+      + '<div class="past-day-detail" style="display:none;padding-bottom:10px">' + buildPastDayDetail(ens, tgt2) + '</div>'
+      + '</div>';
   }).join("");
+}
+
+function buildPastDayDetail(ens, tgt) {
+  var html = "";
+  ens.forEach(function(e) {
+    var kcal = parseFloat(e.kcal) || 0;
+    var items = e.items || [];
+    var kcalColor = kcal > 600 ? "var(--co)" : "var(--g)";
+    html += '<div style="margin-bottom:10px;padding:8px 10px;background:var(--bg);border-radius:8px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">'
+      + '<span style="font-weight:600;font-size:13px">' + escapeHtml(e.meal) + '</span>'
+      + (kcal > 0 ? '<span style="font-weight:700;font-size:14px;color:' + kcalColor + '">' + Math.round(kcal) + ' <span style="font-size:10px;font-weight:400;color:var(--mu)">kcal</span></span>' : '')
+      + '</div>';
+    if (e.text) html += '<div style="font-size:11.5px;color:var(--mu);margin-bottom:4px">' + escapeHtml(e.text.slice(0,80)) + '</div>';
+    if (items.length) {
+      html += '<table style="width:100%;font-size:11px;border-collapse:collapse">';
+      items.forEach(function(it) {
+        html += '<tr style="border-top:1px solid var(--bo)">'
+          + '<td style="padding:3px 0;color:var(--tx)">' + escapeHtml(it.name||"") + '</td>'
+          + '<td style="text-align:right;padding:3px 0;color:var(--mu)">' + escapeHtml(it.qty||"") + '</td>'
+          + '<td style="text-align:right;padding:3px 0;font-weight:500;padding-left:8px">' + (parseInt(it.kcal)||0) + '</td>'
+          + '</tr>';
+      });
+      html += '</table>';
+    } else if (kcal === 0) {
+      html += '<div style="font-size:11px;color:#E76F51;margin-top:2px">Not analysed on this day</div>';
+    }
+    html += '</div>';
+  });
+  // Assessment + suggestion from first meal that has them
+  var withAssess = ens.filter(function(e){ return e.assess || e.assessment; });
+  if (withAssess.length) {
+    var assess = withAssess[0].assess || withAssess[0].assessment || "";
+    var sug    = withAssess[0].sug   || withAssess[0].suggestion  || "";
+    if (assess) html += '<div style="background:var(--gl);border-radius:8px;padding:8px 10px;font-size:12px;color:#1A3A23;line-height:1.6">'
+      + '<strong>Assessment:</strong> ' + escapeHtml(assess)
+      + (sug ? '<br><strong>Tip:</strong> ' + escapeHtml(sug) : "")
+      + '</div>';
+  }
+  return html;
+}
+
+function togglePastDay(headerEl) {
+  var row    = headerEl.parentElement;
+  var detail = row.querySelector(".past-day-detail");
+  var arrow  = headerEl.querySelector(".past-arrow");
+  var isOpen = detail.style.display !== "none";
+  // Close all others
+  var allRows = document.querySelectorAll(".past-day-row");
+  allRows.forEach(function(r) {
+    r.querySelector(".past-day-detail").style.display = "none";
+    var a = r.querySelector(".past-arrow");
+    if (a) a.style.transform = "";
+  });
+  // Toggle this one
+  if (!isOpen) {
+    detail.style.display = "block";
+    if (arrow) arrow.style.transform = "rotate(90deg)";
+  }
 }
 
 async function deleteFood(idx) {
@@ -1769,6 +1848,20 @@ function showCloseDay() {
       if (aiOut)  { aiOut.innerHTML = html2; aiOut.style.display = "block"; }
       if (aiBtn)  { aiBtn.style.display = "block"; aiBtn.textContent = "Regenerate Summary"; }
       if (aiLoad) aiLoad.style.display = "none";
+      // Show the AI section and close button since we have a result
+      var aiSec2   = document.getElementById("cd-ai-section");
+      var howBtn2  = document.getElementById("cd-how-btn");
+      var howHint2 = document.getElementById("cd-how-hint");
+      var closeBtn2 = document.getElementById("cd-close-btn");
+      var quote2   = document.getElementById("cd-quote");
+      if (aiSec2)   aiSec2.style.display = "block";
+      if (howBtn2)  { howBtn2.disabled = true; howBtn2.style.opacity = "0.5"; howBtn2.innerHTML = "&#10003; Summary ready — scroll down"; }
+      if (howHint2) howHint2.style.display = "none";
+      if (closeBtn2) closeBtn2.style.display = "block";
+      if (quote2 && QUIRKY_QUOTES && QUIRKY_QUOTES.length) {
+        quote2.textContent = QUIRKY_QUOTES[Math.floor(Math.random() * QUIRKY_QUOTES.length)];
+        quote2.style.display = "block";
+      }
     } catch(e) {}
   }
   // Clean up old AI analyses (older than 7 days)
@@ -1797,7 +1890,7 @@ async function confirmCloseDay() {
   if (cdc) cdc.querySelectorAll("button[data-sel='1']").forEach(function(b){ challenge.push(b.dataset.val); });
 
   // Disable confirm button to prevent double-tap
-  var confirmBtn = document.querySelector("#closeday-modal .btn[onclick='confirmCloseDay()']");
+  var confirmBtn = document.getElementById("cd-how-btn");
   if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = "Saving..."; }
 
   // Run AI analysis first (if not already cached)
@@ -1824,7 +1917,7 @@ async function confirmCloseDay() {
     PRO.day_closed_date = today();
   } catch(e) {
     showToast("Could not close day: " + (e.message||"unknown"), "err");
-    if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = "Confirm & Close Day ✓"; }
+    if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.innerHTML = "&#127769; How did I do today?"; }
     return;
   }
 
@@ -2452,12 +2545,21 @@ async function runCloseDayAI() {
   var chalEl = document.getElementById("cd-challenge-chips");
   if (chalEl) chalEl.querySelectorAll("button[data-sel='1']").forEach(function(b){tomorrowChal.push(b.dataset.val);});
 
-  // Meal list
-  // Deduplicate by meal type — keep last entry per meal
+  // Meal list — deduplicate by meal type, keep highest kcal entry
+  // Skip 0-kcal entries unless it's the only one for that meal
   var mealMap = {};
-  todayMeals.forEach(function(e){ mealMap[e.meal] = e; });
+  todayMeals.forEach(function(e) {
+    var kcal = parseFloat(e.kcal) || 0;
+    var existing = mealMap[e.meal];
+    if (!existing || kcal > (parseFloat(existing.kcal) || 0)) {
+      mealMap[e.meal] = e;
+    }
+  });
+  // Filter out meals with 0 kcal unless no analysed meals exist at all
   var dedupMeals = Object.values(mealMap);
-  var totalKcal  = dedupMeals.reduce(function(s,e){return s+(e.kcal||0);},0);
+  var analysedMeals = dedupMeals.filter(function(e){ return (parseFloat(e.kcal)||0) > 0; });
+  if (analysedMeals.length > 0) dedupMeals = analysedMeals;
+  var totalKcal  = dedupMeals.reduce(function(s,e){return s+(parseFloat(e.kcal)||0);},0);
   var mealsSummary = dedupMeals.length
     ? dedupMeals.map(function(e){return e.meal+": "+e.text.slice(0,60)+" ("+( e.kcal||0)+" kcal)";}).join("; ")
     : "No meals logged";
@@ -2712,16 +2814,22 @@ function goTab(btn, name) {
     <div id="cd-food-missing" style="display:none;margin-bottom:10px;background:var(--bg);border-radius:10px;padding:9px 13px;font-size:12px;color:var(--mu);text-align:center">
       No food logged today — head to the Food tab.
     </div>
-    <div id="cd-ai-section" style="margin-bottom:12px;padding-top:10px;border-top:1px solid #DDE8DC">
-      <div id="cd-ai-load" style="display:none;text-align:center;padding:10px;font-size:12px;color:#6B7F6E"><span class="spin"></span> Generating your day summary...</div>
-      <div id="cd-ai-out" style="display:none;margin-top:10px;background:#F0FBF4;border:1px solid #B7E4C7;border-radius:12px;padding:12px 14px;font-size:13px;color:#1A3A23;line-height:1.7"></div>
+    <!-- Primary CTA: Get AI summary -->
+    <button class="btn" id="cd-how-btn" onclick="confirmCloseDay()" style="margin-top:4px;width:100%;font-size:15px">&#127769; How did I do today?</button>
+    <div id="cd-how-hint" style="text-align:center;font-size:11px;color:var(--mu);margin-top:5px">Tap to get your personalised day review</div>
+
+    <!-- AI result section — shown after tap -->
+    <div id="cd-ai-section" style="display:none;margin-top:14px;padding-top:12px;border-top:2px solid #D8F3DC">
+      <div id="cd-ai-load" style="text-align:center;padding:10px;font-size:12px;color:#6B7F6E"><span class="spin"></span> Generating your day summary...</div>
+      <div id="cd-ai-out" style="display:none;background:#F0FBF4;border:1px solid #B7E4C7;border-radius:12px;padding:12px 14px;font-size:13px;color:#1A3A23;line-height:1.7"></div>
       <button class="btn btn-s btn-o" id="cd-ai-btn" onclick="runCloseDayAI()" style="width:100%;margin-top:8px;display:none">Regenerate Summary</button>
     </div>
 
     <!-- Sleep quote -->
-    <div id="cd-quote" style="margin:10px 0;background:#D8F3DC;border-radius:12px;padding:12px 14px;font-size:12.5px;color:#1A3A23;line-height:1.6;font-style:italic"></div>
+    <div id="cd-quote" style="display:none;margin:10px 0;background:#D8F3DC;border-radius:12px;padding:12px 14px;font-size:12.5px;color:#1A3A23;line-height:1.6;font-style:italic"></div>
 
-    <button class="btn" onclick="confirmCloseDay()" style="margin-top:10px;width:100%">Confirm &amp; Close Day — Get My Summary &#10003;</button>
+    <!-- Close Day button — appears after AI result -->
+    <button class="btn" id="cd-close-btn" onclick="closeDayFinal()" style="display:none;margin-top:12px;width:100%;background:#1A2E1E">&#10003; Close My Day</button>
   </div>
 </div>
 
