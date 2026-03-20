@@ -1882,53 +1882,75 @@ function closeModal() {
 }
 
 async function confirmCloseDay() {
+  // Step 1: show AI section, disable button
+  var howBtn  = document.getElementById("cd-how-btn");
+  var howHint = document.getElementById("cd-how-hint");
+  var aiSec   = document.getElementById("cd-ai-section");
+  var aiLoad  = document.getElementById("cd-ai-load");
+  if (howBtn)  { howBtn.disabled = true; howBtn.innerHTML = "&#127769; Generating your summary..."; }
+  if (howHint) howHint.style.display = "none";
+  if (aiSec)   aiSec.style.display = "block";
+  if (aiLoad)  aiLoad.style.display = "block";
+
+  // Step 2: Save chips to daily_logs
   var worked = [];
   var cdw = document.getElementById("cd-worked-chips");
   if (cdw) cdw.querySelectorAll("button[data-sel='1']").forEach(function(b){ worked.push(b.dataset.val); });
   var challenge = [];
   var cdc = document.getElementById("cd-challenge-chips");
   if (cdc) cdc.querySelectorAll("button[data-sel='1']").forEach(function(b){ challenge.push(b.dataset.val); });
-
-  // Disable confirm button to prevent double-tap
-  var confirmBtn = document.getElementById("cd-how-btn");
-  if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = "Saving..."; }
-
-  // Run AI analysis first (if not already cached)
-  var cachedAI = localStorage.getItem("closeday_ai_" + today());
-  if (!cachedAI) {
-    // Show spinner in modal while AI runs
-    var aiLoad = document.getElementById("cd-ai-load");
-    if (aiLoad) aiLoad.style.display = "block";
-    if (confirmBtn) confirmBtn.textContent = "Running AI analysis...";
-    await runCloseDayAI();
-  }
-
   try {
     await db.from("daily_logs").upsert({
       user_id: CU.id, date: today(),
       what_worked: JSON.stringify(worked),
       next_challenge: challenge[0] || null
     }, {onConflict: "user_id,date"});
-  } catch(e) { console.warn("daily_logs save:", e.message); }
+  } catch(e) { console.warn("daily_logs:", e.message); }
 
+  // Step 3: Mark day closed on profile
   try {
     var res = await db.from("profiles").update({ day_closed_date: today() }).eq("id", CU.id);
     if (res.error) throw res.error;
     PRO.day_closed_date = today();
   } catch(e) {
     showToast("Could not close day: " + (e.message||"unknown"), "err");
-    if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.innerHTML = "&#127769; How did I do today?"; }
+    if (howBtn) { howBtn.disabled = false; howBtn.innerHTML = "&#127769; How did I do today?"; }
+    if (aiLoad) aiLoad.style.display = "none";
     return;
   }
 
+  // Step 4: Run AI (or restore cache)
+  var cachedAI = localStorage.getItem("closeday_ai_" + today());
+  if (!cachedAI) {
+    await runCloseDayAI();
+  }
+
+  // Step 5: Show close button — user reads summary then closes
+  var closeBtn = document.getElementById("cd-close-btn");
+  var quoteEl  = document.getElementById("cd-quote");
+  if (closeBtn) closeBtn.style.display = "block";
+  if (howBtn)   { howBtn.innerHTML = "&#10003; Summary ready — scroll down"; howBtn.style.opacity = "0.5"; }
+  if (quoteEl && QUIRKY_QUOTES && QUIRKY_QUOTES.length) {
+    quoteEl.textContent = QUIRKY_QUOTES[Math.floor(Math.random() * QUIRKY_QUOTES.length)];
+    quoteEl.style.display = "block";
+  }
+
+  // Update Today tab state
   var cdBtn = document.getElementById("closeday-today-btn");
   var cdMsg = document.getElementById("day-closed-msg");
   if (cdBtn) cdBtn.style.display = "none";
   if (cdMsg) cdMsg.style.display = "block";
-
-  closeModal();
   updateAnalyseBtn();
+
+  // Scroll modal to show the AI result
+  var modalInner = document.querySelector("#closeday-modal > div");
+  if (modalInner) setTimeout(function(){ modalInner.scrollTop = modalInner.scrollHeight; }, 400);
+}
+
+async function closeDayFinal() {
+  // Final tap: just close the modal — day already marked closed in confirmCloseDay
   showFlash();
+  closeModal();
 }
 
 function isDayClosed() {
