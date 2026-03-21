@@ -399,7 +399,6 @@ canvas{max-height:190px;}
       <div class="card-t">Weekly Report</div>
       <div style="display:flex;gap:8px;margin-bottom:10px">
         <button class="btn btn-s" onclick="makeReport()">Generate</button>
-        <button class="btn btn-s btn-o" onclick="exportJSON()">Export JSON</button>
       </div>
       <div id="report-out" style="font-size:13px;color:var(--mu)">Tap Generate for weekly summary.</div>
     </div>
@@ -407,21 +406,22 @@ canvas{max-height:190px;}
   </div>
 
   <div class="sc" id="sc-plan">
-    <div style="font-size:17px;font-weight:600;margin:5px 0 3px">Your Plan</div>
-    <div style="font-size:12px;color:var(--mu);margin-bottom:11px">Tailored: 47 yrs &middot; BMI 29 &middot; Gentle approach</div>
+    <div style="font-size:17px;font-weight:600;margin:5px 0 3px">Your Wellness Plan</div>
+
     <div id="plan-ai-out" style="margin-bottom:11px"></div>
-    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-      <button class="btn btn-s" onclick="genPlan()">&#10022; Regenerate Plan</button>
-      <div id="plan-regen-hint" style="font-size:11px;color:var(--mu);margin-top:4px;text-align:center"></div>
-      <button class="btn btn-s btn-o" onclick="togglePlanEdit()">&#9998; Edit My Plan</button>
-      <div id="plan-load" style="display:none;font-size:13px;color:var(--mu);align-self:center"><span class="spin"></span>Generating...</div>
+
+    <!-- Edit first, then regenerate — primary path -->
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-t">Update your plan</div>
+      <div style="font-size:12px;color:var(--mu);margin-bottom:9px">Changed your goals, routine or diet? Describe it here — Claude will tailor a new plan around it.</div>
+      <textarea id="plan-edit-txt" placeholder="e.g. I joined a gym 3 days a week&#10;I went vegetarian last month&#10;I prefer walks over HIIT&#10;My goal is now muscle building" style="width:100%;min-height:88px;resize:vertical;line-height:1.6;font-size:13px;margin-bottom:9px"></textarea>
+      <button class="btn btn-s" style="width:100%" onclick="genPlanWithEdit()">&#10022; Regenerate My Plan</button>
+      <div id="plan-regen-hint" style="font-size:11px;color:var(--mu);margin-top:5px;text-align:center"></div>
+      <div id="plan-load" style="display:none;text-align:center;margin-top:8px;font-size:12px;color:var(--mu)"><span class="spin"></span> Generating your plan...</div>
     </div>
-    <div id="plan-edit-box" style="display:none;background:#fff;border:1px solid var(--bo);border-radius:var(--ra);padding:14px 15px;margin-bottom:11px">
-      <div class="card-t">Customise your plan</div>
-      <div style="font-size:12px;color:var(--mu);margin-bottom:10px">Describe any changes — e.g. "I do yoga Mon-Fri not Mon-Wed-Fri" or "I prefer cycling over rowing"</div>
-      <textarea id="plan-edit-txt" placeholder="e.g. I have yoga class every weekday morning. I cannot do HIIT. I prefer walks over gym..." style="width:100%;min-height:80px;resize:vertical;line-height:1.6;font-size:13px"></textarea>
-      <button class="btn btn-s" style="margin-top:9px" onclick="genPlanWithEdit()">&#10022; Apply Changes</button>
-    </div>
+
+    <!-- Invisible edit box kept for JS compatibility -->
+    <div id="plan-edit-box" style="display:none"></div>
     <div class="sec-lbl">Daily Targets</div>
     <div class="card" style="padding:10px 14px">
       <div class="h-row2"><div style="display:flex;align-items:center;gap:10px"><div class="h-icon" style="background:#D8F3DC">&#129496;</div><div><div style="font-size:13px;font-weight:500">Yoga Asanas</div><div style="font-size:11px;color:var(--mu)">30 min weekdays</div></div></div><span class="pill">Your habit</span></div>
@@ -498,7 +498,7 @@ canvas{max-height:190px;}
       <div class="set-row"><div><div style="font-size:14px;font-weight:500">Account</div><div style="font-size:12px;color:var(--mu)" id="s-em"></div></div><span style="font-size:12px;color:var(--g)">Connected</span></div>
 
       <div class="set-row"><div><div style="font-size:14px;font-weight:500">Export data</div><div style="font-size:12px;color:var(--mu)">JSON backup</div></div><button class="btn btn-s btn-o" onclick="exportJSON()">Export</button></div>
-      <div class="set-row" style="border-bottom:none"><div><div style="font-size:14px;font-weight:500">Redo onboarding</div><div style="font-size:12px;color:var(--mu)">Fix wrong values from first setup</div></div><button class="btn btn-s btn-o" style="border-color:var(--co);color:var(--co)" onclick="resetOnboarding()">Reset</button></div>
+
     </div>
 
     <div class="sec-lbl">Beta &amp; Feedback</div>
@@ -1846,7 +1846,7 @@ function showCloseDay() {
       var aiBtn = document.getElementById("cd-ai-btn");
       var aiLoad = document.getElementById("cd-ai-load");
       if (aiOut)  { aiOut.innerHTML = html2; aiOut.style.display = "block"; }
-      if (aiBtn)  { aiBtn.style.display = "block"; aiBtn.textContent = "Regenerate Summary"; }
+      if (aiBtn)  aiBtn.style.display = "none";
       if (aiLoad) aiLoad.style.display = "none";
       // Show the AI section and close button since we have a result
       var aiSec2   = document.getElementById("cd-ai-section");
@@ -2154,6 +2154,7 @@ async function submitOnboard() {
     birth_year:   new Date().getFullYear() - age,
     calorie_target: cal,
     onboarded: true,
+    last_onboard_date: new Date().toISOString().slice(0,10),
     user_goals:  JSON.stringify(goals),
     equipment:   JSON.stringify(equip),
     sleep_hrs:   sleepHrs,
@@ -2170,6 +2171,7 @@ async function submitOnboard() {
   try {
     await db.from("profiles").upsert(p);
     PRO = Object.assign({}, PRO, p);
+    PRO.last_onboard_date = p.last_onboard_date;
   } catch(e) {
     document.getElementById("ob-err").textContent = "Could not save profile: " + e.message;
     document.getElementById("ob-err").style.display = "block";
@@ -2331,11 +2333,51 @@ async function genPlanWithEdit() {
 }
 
 async function resetOnboarding() {
-  if (!confirm("This will take you back through onboarding to fix your details. Continue?")) return;
+  // Check 21-day cooldown
+  if (PRO.last_onboard_date) {
+    var daysSince = Math.floor((new Date() - new Date(PRO.last_onboard_date)) / 86400000);
+    if (daysSince < 21) {
+      var daysLeft = 21 - daysSince;
+      var lastDate = new Date(PRO.last_onboard_date).toLocaleDateString("en-IN", {day:"numeric", month:"long"});
+      await showConfirm(
+        "You last updated your profile on " + lastDate + ". You can redo onboarding in " +
+        daysLeft + " day" + (daysLeft === 1 ? "" : "s") + "." +
+        " If something is urgently wrong, let us know via Feedback.",
+        true  // info-only mode — no confirm button
+      );
+      return;
+    }
+  }
+  // Show confirmation dialog
+  var confirmed = await showConfirm(
+    "This updates your profile and generates a new plan. All your tracked data (food, weight, steps, habits) is kept safely."
+  );
+  if (!confirmed) return;
   await db.from("profiles").upsert({ id: CU.id, onboarded: false });
   PRO.onboarded = false;
   document.getElementById("app").style.display = "none";
   showOnboard();
+}
+
+function showConfirm(msg, infoOnly) {
+  return new Promise(function(resolve) {
+    var overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9998;display:flex;align-items:center;justify-content:center;padding:20px";
+    var title = infoOnly ? "Not yet available" : "Update your profile?";
+    var buttons = infoOnly
+      ? '<button id="confirm-cancel" class="btn btn-s" style="width:100%">Got it</button>'
+      : '<div style="display:flex;gap:10px"><button id="confirm-cancel" class="btn btn-s btn-o" style="flex:1">Cancel</button><button id="confirm-ok" class="btn btn-s" style="flex:1">Continue</button></div>';
+    overlay.innerHTML =
+      '<div style="background:#fff;border-radius:16px;padding:22px 20px;max-width:320px;width:100%">' +
+      '<div style="font-size:15px;font-weight:600;color:#1A2E1E;margin-bottom:10px">' + title + '</div>' +
+      '<div style="font-size:13px;color:#6B7F6E;line-height:1.6;margin-bottom:18px">' + msg + '</div>' +
+      buttons + '</div>';
+    document.body.appendChild(overlay);
+    var okBtn = overlay.querySelector("#confirm-ok");
+    var cancelBtn = overlay.querySelector("#confirm-cancel");
+    if (okBtn) okBtn.onclick = function() { document.body.removeChild(overlay); resolve(true); };
+    cancelBtn.onclick = function() { document.body.removeChild(overlay); resolve(false); };
+  });
 }
 
 async function quickLogSteps() {
@@ -2693,7 +2735,7 @@ async function runCloseDayAI() {
     // Save to localStorage keyed by date — persists for 7 days
     localStorage.setItem("closeday_ai_" + today(), JSON.stringify(parsed));
     // Show ai section if button was re-pressed — hide the button
-    if (btn) { btn.style.display = "block"; btn.textContent = "Regenerate Summary"; }
+    if (btn) btn.style.display = "none";
   } catch(e) {
     if (out) { out.innerHTML = "<span style='color:var(--co)'>Could not generate summary: " + e.message + ". <a href='#' onclick='runCloseDayAI();return false;'>Retry</a></span>"; out.style.display = "block"; }
     if (btn) { btn.style.display = "block"; btn.textContent = "Retry AI Summary"; }
@@ -2844,7 +2886,7 @@ function goTab(btn, name) {
     <div id="cd-ai-section" style="display:none;margin-top:14px;padding-top:12px;border-top:2px solid #D8F3DC">
       <div id="cd-ai-load" style="text-align:center;padding:10px;font-size:12px;color:#6B7F6E"><span class="spin"></span> Generating your day summary...</div>
       <div id="cd-ai-out" style="display:none;background:#F0FBF4;border:1px solid #B7E4C7;border-radius:12px;padding:12px 14px;font-size:13px;color:#1A3A23;line-height:1.7"></div>
-      <button class="btn btn-s btn-o" id="cd-ai-btn" onclick="runCloseDayAI()" style="width:100%;margin-top:8px;display:none">Regenerate Summary</button>
+      <!-- Regenerate button removed: summary shown once on Close Day -->
     </div>
 
     <!-- Sleep quote -->

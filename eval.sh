@@ -215,7 +215,7 @@ html = open("index.html").read()
 checks = [
     ('genPlan',             "Plan generation function"),
     ('renderAIPlan',        "Plan render function"),
-    ('Regenerate Plan',     "Regenerate plan button"),
+    ('Regenerate My Plan',  "Regenerate plan button (new label)"),
     ('id="plan-regen-hint"',"Regen availability hint"),
     ('ai_plan_date',        "Weekly regen limit tracking"),
     ('PRO.ai_plan_date = new', "Plan date saved after generation"),
@@ -308,7 +308,7 @@ checks = [
     ('goal_progress',         "7-section: goal progress"),
     ('tomorrow_strategy',     "7-section: tomorrow strategy"),
     ('closeday_ai_',          "AI result cached to localStorage"),
-    ('Running AI analysis',   "AI runs when Confirm is tapped"),
+    ('Generating your summary', "AI runs when Confirm is tapped"),
     ('day_closed_date',       "Day closed date saved to DB"),
     ('closeModal',            "Close modal function"),
 ]
