@@ -545,55 +545,99 @@ var wChart = null;
 var sChart = null;
 
 // Base habits — always shown
-var BASE_HABITS = [
-  {id:"med",    icon:"&#129496;", name:"Meditation",           sub:"15 min",    wd:false },
-  {id:"dinner", icon:"&#128343;", name:"Early dinner",         sub:"by 7:30",   wd:false },
-  {id:"sleep",  icon:"&#128564;", name:"Good sleep last night",sub:"7-8 hrs",   wd:false }
-];
+// Icon map for AI-generated habit IDs
+var HABIT_ICONS = {
+  "yoga":       "&#129496;",
+  "exercise":   "&#129496;",
+  "cycling":    "&#128690;",
+  "swimming":   "&#127946;",
+  "walk":       "&#128694;",
+  "steps":      "&#128099;",
+  "hiit":       "&#127939;",
+  "strength":   "&#128170;",
+  "rowing":     "&#128692;",
+  "protein":    "&#129371;",
+  "sleep":      "&#128564;",
+  "winddown":   "&#127769;",
+  "meditation": "&#129496;",
+  "med":        "&#129496;",
+  "dinner":     "&#128343;",
+  "water":      "&#128167;",
+  "default":    "&#9989;"
+};
 
-// Dynamic habits built from user profile + AI plan
-function buildHabits() {
-  var habits = [];
-  var equip    = JSON.parse(PRO.equipment    || "[]");
-  var exercise = JSON.parse(PRO.exercise_pref || "[]");
-  var goals    = JSON.parse(PRO.user_goals   || "[]");
-
-  // Exercise habit — based on what they told us they do
-  if (exercise.indexOf("Yoga") > -1) {
-    habits.push({id:"yoga", icon:"&#129496;", name:"Yoga", sub:"as per your plan", wd:true});
-  } else if (exercise.indexOf("Cycling") > -1) {
-    habits.push({id:"yoga", icon:"&#128690;", name:"Cycling", sub:"as per your plan", wd:false});
-  } else if (exercise.indexOf("Swimming") > -1) {
-    habits.push({id:"yoga", icon:"&#127946;", name:"Swimming", sub:"as per your plan", wd:false});
-  } else if (exercise.indexOf("Walking") > -1) {
-    habits.push({id:"yoga", icon:"&#128694;", name:"Walk", sub:"8K+ steps", wd:false});
-  } else if (exercise.indexOf("HIIT") > -1) {
-    habits.push({id:"yoga", icon:"&#127939;", name:"HIIT workout", sub:"as per plan", wd:false});
-  } else {
-    habits.push({id:"yoga", icon:"&#129496;", name:"Exercise", sub:"as per your plan", wd:false});
+function habitIcon(id) {
+  var key = (id || "default").toLowerCase().replace(/-/g,"");
+  for (var k in HABIT_ICONS) {
+    if (key.indexOf(k) > -1) return HABIT_ICONS[k];
   }
-
-  // Strength habit — only if they have equipment
-  if (equip.length && equip.indexOf("No equipment") === -1) {
-    habits.push({id:"strength", icon:"&#128170;", name:"Strength / " + (equip.indexOf("Rower") > -1 ? "Rowing" : "Workout"), sub:"20-30 min", wd:false});
-  }
-
-  // Muscle goal → extra protein habit
-  if (goals.indexOf("Build muscle") > -1) {
-    habits.push({id:"protein", icon:"&#129371;", name:"Protein goal", sub:"90-100g today", wd:false});
-  }
-
-  // Sleep goal → wind-down habit
-  if (goals.indexOf("Sleep well") > -1) {
-    habits.push({id:"winddown", icon:"&#127769;", name:"Wind-down routine", sub:"by " + (PRO.sleep_time || "10:00 PM"), wd:false});
-  }
-
-  // Always add base habits at end
-  return habits.concat(BASE_HABITS);
+  return HABIT_ICONS.default;
 }
 
-// HABITS is now dynamic
-var HABITS = BASE_HABITS; // fallback until profile loads
+// Build merged habit list: AI plan + goals + BASE
+function buildHabits() {
+  var seenIds = {};
+  var habits  = [];
+
+  function addHabit(h) {
+    var id = (h.id || "").toLowerCase();
+    if (!id || seenIds[id]) return;
+    seenIds[id] = true;
+    habits.push({
+      id:   id,
+      icon: h.icon || habitIcon(id),
+      name: escapeHtml(h.name || id),
+      sub:  escapeHtml(h.sub  || "")
+    });
+  }
+
+  // ── Layer 1: AI-generated key habits (highest priority) ──────────
+  try {
+    var aiHabits = JSON.parse(PRO.ai_key_habits || "[]");
+    aiHabits.forEach(function(h) { addHabit(h); });
+  } catch(e) {}
+
+  // ── Layer 2: Goal-based habits (if not already in AI list) ───────
+  var goals = JSON.parse(PRO.user_goals || "[]");
+
+  if (goals.indexOf("Build muscle") > -1)
+    addHabit({id:"protein",  name:"Protein goal",      sub:"as per plan"});
+  if (goals.indexOf("Sleep well") > -1)
+    addHabit({id:"winddown", name:"Wind-down routine",  sub:"by " + (PRO.sleep_time || "10:00 PM")});
+  if (goals.indexOf("Reduce stress") > -1)
+    addHabit({id:"meditation", name:"Meditation",       sub:"15 min"});
+  if (goals.indexOf("More energy") > -1)
+    addHabit({id:"water",    name:"Stay hydrated",      sub:"8 glasses"});
+  if (goals.indexOf("Lose weight") > -1)
+    addHabit({id:"dinner",   name:"Early dinner",       sub:"finish by 7:30 PM"});
+
+  // ── Layer 3: Onboarding-based exercise (if AI plan didn't specify) ─
+  var exercise = JSON.parse(PRO.exercise_pref || "[]");
+  var equip    = JSON.parse(PRO.equipment     || "[]");
+
+  if (exercise.indexOf("Yoga") > -1)
+    addHabit({id:"yoga",     name:"Yoga",               sub:"as per your plan"});
+  if (exercise.indexOf("Cycling") > -1)
+    addHabit({id:"cycling",  name:"Cycling",            sub:"as per plan"});
+  if (exercise.indexOf("Swimming") > -1)
+    addHabit({id:"swimming", name:"Swimming",           sub:"as per plan"});
+  if (exercise.indexOf("Walking") > -1)
+    addHabit({id:"walk",     name:"Walk",               sub:"8K+ steps"});
+  if (exercise.indexOf("HIIT") > -1)
+    addHabit({id:"hiit",     name:"HIIT workout",       sub:"as per plan"});
+  if (equip.length && equip.indexOf("No equipment") === -1)
+    addHabit({id:"strength", name:"Strength / " + (equip.indexOf("Rower") > -1 ? "Rowing" : "Workout"), sub:"20-30 min"});
+
+  // ── Layer 4: BASE — always show if not already present ───────────
+  addHabit({id:"med",    name:"Meditation",            sub:"15 min"});
+  addHabit({id:"dinner", name:"Early dinner",           sub:"by 7:30 PM"});
+  addHabit({id:"sleep",  name:"Good sleep last night",  sub:"7-8 hrs"});
+
+  return habits;
+}
+
+// HABITS global — rebuilt on login and plan regeneration
+var HABITS = [];
 function refreshHabits() { HABITS = buildHabits(); }
 
 var TIPS = [
@@ -651,6 +695,21 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function sanitiseInput(str) {
+  // Strip any HTML tags, script injections, and dangerous patterns from user text
+  // Used before storing or passing to AI — not for display (use escapeHtml for that)
+  if (!str) return "";
+  return String(str)
+    .replace(/<[^>]*>/g, "")               // strip all HTML tags
+    .replace(/javascript\s*:/gi, "")        // remove javascript: protocol
+    .replace(/on\w+\s*=/gi, "")            // remove event handlers (onclick= etc)
+    .replace(/eval\s*\(/gi, "")            // remove eval(
+    .replace(/\{\{.*?\}\}/g, "")           // remove template injection {{...}}
+    .replace(/\$\{.*?\}/g, "")            // remove JS template literals ${...}
+    .trim()
+    .slice(0, 500);                         // hard cap at 500 chars
 }
 
 function today() {
@@ -812,7 +871,7 @@ async function loadData() {
     if (!DAT.food[x.date]) DAT.food[x.date] = [];
     DAT.food[x.date].push({ meal: x.meal, text: x.description, items: x.items || [], kcal: parseFloat(x.total_kcal) || 0, prot: parseFloat(x.total_protein_g) || 0, assess: x.assessment, sug: x.suggestion, id: x.id });
   });
-  refreshHabits();  // build habits from this user's profile
+  refreshHabits();  // build habits from AI plan + profile
   // Load today's analysis count from Supabase
   try {
     var usageLoad = await db.from("daily_usage")
@@ -875,7 +934,7 @@ function renderToday() {
   var isWkday = [1, 2, 3, 4, 5].indexOf(new Date().getDay()) > -1;
   var hlEl    = document.getElementById("habit-list");
   hlEl.innerHTML = "";
-  HABITS.filter(function(h) { return !h.wd || isWkday; }).forEach(function(h) {
+  HABITS.forEach(function(h) {
     var done = todayH[h.id] || false;
     var row  = document.createElement("div");
     row.className = "h-row2";
@@ -1873,6 +1932,22 @@ function showCloseDay() {
       if (diff2 > 7) localStorage.removeItem(key);
     }
   }
+  // Wire up reflection counter and restore any saved draft
+  var refEl = document.getElementById("cd-reflection");
+  var refCount = document.getElementById("cd-reflection-count");
+  if (refEl) {
+    refEl.value = "";
+    if (refCount) refCount.textContent = "0";
+    refEl.oninput = function() {
+      if (refCount) refCount.textContent = this.value.length;
+    };
+    // Restore today's saved reflection if modal reopened
+    var savedRefl = localStorage.getItem("cd_reflection_" + today());
+    if (savedRefl) {
+      refEl.value = savedRefl;
+      if (refCount) refCount.textContent = savedRefl.length;
+    }
+  }
   document.getElementById("closeday-modal").style.display = "flex";
   document.getElementById("sleep-notif-banner").style.display = "none";
 }
@@ -1899,11 +1974,16 @@ async function confirmCloseDay() {
   var challenge = [];
   var cdc = document.getElementById("cd-challenge-chips");
   if (cdc) cdc.querySelectorAll("button[data-sel='1']").forEach(function(b){ challenge.push(b.dataset.val); });
+  var journalTxt   = sanitiseInput(document.getElementById("cd-journal-txt")   ? document.getElementById("cd-journal-txt").value   : "");
+  var challengeTxt = sanitiseInput(document.getElementById("cd-challenge-txt") ? document.getElementById("cd-challenge-txt").value : "");
+
   try {
     await db.from("daily_logs").upsert({
       user_id: CU.id, date: today(),
-      what_worked: JSON.stringify(worked),
-      next_challenge: challenge[0] || null
+      what_worked:     JSON.stringify(worked),
+      next_challenge:  challenge[0] || null,
+      journal_notes:   journalTxt   || null,
+      challenge_notes: challengeTxt || null
     }, {onConflict: "user_id,date"});
   } catch(e) { console.warn("daily_logs:", e.message); }
 
@@ -2218,7 +2298,8 @@ async function genPlan(fromOnboard) {
     '"calorie_tip": "specific calorie/meal advice for their diet style",' +
     '"weekly_schedule": [{"day":"Mon","activities":["activity 1","activity 2"]}],' +
     '"strength_plan": "describe a circuit using their specific equipment, or bodyweight if none",' +
-    '"key_habits": ["habit 1","habit 2","habit 3","habit 4","habit 5"],' +
+    '"key_habits": [{"id":"habit-slug","name":"Habit Name","sub":"specific detail e.g. 25-30g at breakfast"}],' +
+    '// Return 4-6 habits. id must be a short lowercase slug (e.g. yoga, protein, steps, strength, sleep, dinner). name is display text. sub is the specific daily target from the plan.' +
     '"avoid": ["food/habit to avoid 1","food/habit to avoid 2","food/habit to avoid 3"],' +
     '"sleep_tips": "2 specific tips for their sleep quality and how better sleep helps weight loss", "challenges_advice": "2-3 specific strategies to overcome their personal challenges listed above", "health_notes": "specific advice for their health conditions, empty string if none"' +
     "}";
@@ -2234,7 +2315,21 @@ async function genPlan(fromOnboard) {
     var plan = JSON.parse(data.content[0].text.replace(/```json|```/g, "").trim());
     PRO.ai_plan = JSON.stringify(plan);
     PRO.ai_plan_date = new Date().toISOString().slice(0,10);
-    await db.from("profiles").upsert({ id: CU.id, ai_plan: PRO.ai_plan, ai_plan_date: PRO.ai_plan_date });
+    // Store key_habits separately for buildHabits() to use
+    var keyHabits = plan.key_habits || [];
+    // Normalise — handle both string array (old) and object array (new)
+    keyHabits = keyHabits.map(function(h) {
+      if (typeof h === "string") return { id: h.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,20), name: h, sub: "" };
+      return h;
+    });
+    PRO.ai_key_habits = JSON.stringify(keyHabits);
+    await db.from("profiles").upsert({
+      id: CU.id,
+      ai_plan: PRO.ai_plan,
+      ai_plan_date: PRO.ai_plan_date,
+      ai_key_habits: PRO.ai_key_habits
+    });
+    refreshHabits();
     renderAIPlan(plan);
   } catch(e) {
     var errMsg = "Plan generation failed: " + (e.message || e);
@@ -2442,6 +2537,7 @@ function renderTodayWater() {
 async function addMealToLog() {
   var txt  = document.getElementById("food-txt").value.trim();
   var meal = document.getElementById("food-meal").value;
+  txt = sanitiseInput(txt);
   if (!txt) { showToast("Describe the meal first.", "warn"); return; }
 
   // Save to Supabase immediately with 0 kcal (updated after AI analysis)
@@ -2655,10 +2751,16 @@ async function runCloseDayAI() {
   // User challenges from onboarding
   var userChallenges = JSON.parse(PRO.challenges || "[]");
 
-  // What worked chips selected
+  // What worked chips + journal notes
   var workedChips = [];
   var workedEl = document.getElementById("cd-worked-chips");
   if (workedEl) workedEl.querySelectorAll("button[data-sel='1']").forEach(function(b){ workedChips.push(b.dataset.val); });
+  var journalNote   = sanitiseInput(document.getElementById("cd-journal-txt")   ? document.getElementById("cd-journal-txt").value   : "");
+  var challengeNote = sanitiseInput(document.getElementById("cd-challenge-txt") ? document.getElementById("cd-challenge-txt").value : "");
+
+  // User reflection note
+  var refInput = document.getElementById("cd-reflection");
+  var reflection = refInput ? refInput.value.trim() : (localStorage.getItem("cd_reflection_" + today()) || "");
 
   var prompt =
     "You are an honest wellness coach giving " + pname + " their end-of-day comprehensive review." +
@@ -2674,9 +2776,12 @@ async function runCloseDayAI() {
     (missedNames.length ? " Missed: " + missedNames.join(", ") + "." : "") +
     " WATER ANALYSIS: " + waterStatus + "." +
     " STEPS ANALYSIS: " + stepsStatus + "." +
-    (workedChips.length ? " User says these worked today: " + workedChips.join(", ") + "." : "") +
+    (workedChips.length ? " What worked: " + workedChips.join(", ") + "." : "") +
+    (journalNote   ? " Journal note: " + journalNote + "." : "") +
     (tomorrowChal.length ? " Tomorrow's challenge: " + tomorrowChal.join(", ") + "." : "") +
-    " IMPORTANT: Reference only the exact numbers given above. Be specific, honest, and warm." +
+    (challengeNote ? " Extra challenge detail: " + challengeNote + "." : "") +
+    (reflection ? " USER REFLECTION: " + reflection + "." : "") +
+    " IMPORTANT: Reference only the exact numbers given above. Be specific, honest, and warm. If the user shared a reflection, acknowledge it personally." +
     " Respond in JSON only, no markdown, no extra text. Structure:" +
     ' {"food_analysis":"2 sentences: how food intake compared to target and what it means for their goals",' +
     '"habit_analysis":"1-2 sentences on habit completion — which ones done, which missed, pattern observed",' +
@@ -2854,17 +2959,19 @@ function goTab(btn, name) {
     <!-- Day summary (raw data) -->
     <div id="cd-body" style="font-size:13px;line-height:1.8;color:#1A2E1E;margin-bottom:12px"></div>
 
-    <!-- What worked -->
+    <!-- Today's Journal -->
     <div style="margin-bottom:12px;padding-top:10px;border-top:1px solid #DDE8DC">
-      <div style="font-size:12px;font-weight:600;color:#2D6A4F;margin-bottom:8px">What worked today?</div>
-      <div id="cd-worked-chips" style="display:flex;flex-wrap:wrap;gap:7px"></div>
+      <div style="font-size:12px;font-weight:600;color:#2D6A4F;margin-bottom:8px">&#128214; Today's Journal</div>
+      <div id="cd-worked-chips" style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:8px"></div>
+      <textarea id="cd-journal-txt" placeholder="Anything else about your day — how you felt, what surprised you, what you're proud of..." style="width:100%;min-height:64px;resize:vertical;font-size:12.5px;line-height:1.6;border:1px solid var(--bo);border-radius:8px;padding:8px 10px;font-family:'DM Sans',sans-serif;color:var(--tx);background:var(--bg)"></textarea>
     </div>
 
     <!-- Tomorrow challenge -->
     <div style="margin-bottom:12px;padding-top:10px;border-top:1px solid #DDE8DC">
       <div style="font-size:12px;font-weight:600;color:#E76F51;margin-bottom:4px">Tomorrow's challenge?</div>
       <div style="font-size:11px;color:#6B7F6E;margin-bottom:8px">Helps Claude give you the right advice</div>
-      <div id="cd-challenge-chips" style="display:flex;flex-wrap:wrap;gap:7px"></div>
+      <div id="cd-challenge-chips" style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:8px"></div>
+      <textarea id="cd-challenge-txt" placeholder="Anything specific about tomorrow — travel, event, temptation, busy schedule..." style="width:100%;min-height:52px;resize:vertical;font-size:12.5px;line-height:1.6;border:1px solid var(--bo);border-radius:8px;padding:8px 10px;font-family:'DM Sans',sans-serif;color:var(--tx);background:var(--bg)"></textarea>
     </div>
 
     <!-- Next day tip -->

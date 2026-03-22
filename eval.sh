@@ -472,11 +472,22 @@ checks_present = [
     ("past-day-detail",         "Past day detail CSS class"),
     ("past-arrow",              "Accordion arrow indicator"),
     ("not analysed",            "Not analysed badge for 0-kcal days"),
+    # Habit system
+    ("HABIT_ICONS",             "Habit icon map for AI-generated habits"),
+    ("habitIcon",               "habitIcon() function"),
+    ("addHabit",                "Dedup addHabit() in buildHabits"),
+    ("ai_key_habits",           "AI key habits stored on profile"),
+    ("Layer 1",                 "AI plan habits layer"),
+    ("Layer 2",                 "Goal-based habits layer"),
+    ("Layer 3",                 "Onboarding-based habits layer"),
 ]
 checks_absent = [
     ("alert(",                  "No alert() calls remaining"),
     ("Check-up Wed 18",         "Hardcoded check-up date removed"),
     ("18 March",                "Hardcoded date removed"),
+    ("h.wd || isWkday",         "Weekday-only habit filter removed"),
+    ("wd:true",                 "No wd:true habit flags remaining"),
+    ("wd:false",                "No wd:false habit flags remaining"),
 ]
 ok=0; fail=0
 for term, label in checks_present:
